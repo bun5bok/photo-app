@@ -182,38 +182,128 @@
     return r.files;
   }
 
-  function upload(blob, name, parentId, onProgress) {
+  // ---------- 재개 가능 업로드 (동영상 같은 큰 파일도 끊긴 곳부터 이어서 올린다) ----------
+  const CHUNK = 8 * 1024 * 1024; // 256KB의 배수여야 한다
+
+  function driveError(status, text) {
+    let msg = String(status);
+    try { msg = JSON.parse(text).error.message; } catch (e) { /* 무시 */ }
+    const err = new Error('드라이브 오류: ' + msg);
+    err.status = status;
+    return err;
+  }
+
+  function xhrRequest(method, url, headers, body, onProgress) {
     if (!hasToken()) return Promise.reject(new AuthError('token'));
-    const boundary = 'foldercam' + Math.random().toString(36).slice(2);
-    const meta = JSON.stringify({ name, parents: [parentId] });
-    const body = new Blob([
-      `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${meta}\r\n`,
-      `--${boundary}\r\nContent-Type: ${blob.type || 'image/jpeg'}\r\n\r\n`,
-      blob,
-      `\r\n--${boundary}--`
-    ]);
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
-      xhr.open('POST', UPLOAD + '?uploadType=multipart&fields=id,name,webViewLink');
+      xhr.open(method, url);
       xhr.setRequestHeader('Authorization', 'Bearer ' + token.value);
-      xhr.setRequestHeader('Content-Type', 'multipart/related; boundary=' + boundary);
-      xhr.upload.onprogress = (e) => { if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total); };
+      Object.keys(headers).forEach((k) => xhr.setRequestHeader(k, headers[k]));
+      if (onProgress) xhr.upload.onprogress = (e) => onProgress(e.loaded);
       xhr.onload = () => {
         if (xhr.status === 401) { clearToken(); return reject(new AuthError('token')); }
-        if (xhr.status >= 200 && xhr.status < 300) return resolve(JSON.parse(xhr.responseText));
-        let msg = String(xhr.status);
-        try { msg = JSON.parse(xhr.responseText).error.message; } catch (e) { /* 무시 */ }
-        const err = new Error('드라이브 오류: ' + msg);
-        err.status = xhr.status;
-        reject(err);
+        const override = xhr.getResponseHeader('X-HTTP-Status-Code-Override');
+        resolve({ status: override ? Number(override) : xhr.status, text: xhr.responseText, xhr });
       };
       xhr.onerror = () => { const err = new Error('네트워크 오류'); err.network = true; reject(err); };
       xhr.send(body);
     });
   }
 
+  // 308 응답의 Range 헤더("bytes=0-1234")로 서버가 받은 다음 위치를 알아낸다
+  function nextOffset(res) {
+    const range = res.xhr.getResponseHeader('Range');
+    const m = range && range.match(/bytes=0-(\d+)/);
+    return m ? Number(m[1]) + 1 : 0;
+  }
+
+  async function startSession(blob, name, parentId) {
+    const res = await xhrRequest('POST', UPLOAD + '?uploadType=resumable&fields=id,name,webViewLink', {
+      'Content-Type': 'application/json; charset=UTF-8',
+      'X-Upload-Content-Type': blob.type || 'application/octet-stream',
+      'X-Upload-Content-Length': String(blob.size)
+    }, JSON.stringify({ name, parents: [parentId] }));
+    const location = res.xhr.getResponseHeader('Location');
+    if (res.status !== 200 || !location) throw driveError(res.status, res.text);
+    return location;
+  }
+
+  async function uploadedSoFar(sessionUrl, size) {
+    const res = await xhrRequest('PUT', sessionUrl, { 'Content-Range': `bytes */${size}` }, null);
+    if (res.status === 200 || res.status === 201) return { done: JSON.parse(res.text) };
+    if (res.status === 308) return { offset: nextOffset(res) };
+    if (res.status === 404 || res.status === 410) return { expired: true };
+    throw driveError(res.status, res.text);
+  }
+
+  // 5MB 이하는 한 번에 올린다 (드라이브의 간단 업로드 한도)
+  const SIMPLE_MAX = 5 * 1024 * 1024;
+
+  async function uploadSimple(blob, name, parentId, onProgress) {
+    const boundary = 'photoapp' + Math.random().toString(36).slice(2);
+    const body = new Blob([
+      `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify({ name, parents: [parentId] })}\r\n`,
+      `--${boundary}\r\nContent-Type: ${blob.type || 'application/octet-stream'}\r\n\r\n`,
+      blob,
+      `\r\n--${boundary}--`
+    ]);
+    const res = await xhrRequest('POST', UPLOAD + '?uploadType=multipart&fields=id,name,webViewLink',
+      { 'Content-Type': 'multipart/related; boundary=' + boundary }, body,
+      (loaded) => onProgress && onProgress(Math.min(1, loaded / body.size)));
+    if (res.status >= 200 && res.status < 300) return JSON.parse(res.text);
+    throw driveError(res.status, res.text);
+  }
+
+  // 큰 파일은 8MB씩 나눠 올리고, 끊기면 서버가 받은 곳부터 이어서 올린다
+  // session: 이전에 시작한 업로드 주소 (없으면 새로 시작), onSession: 새 주소를 저장할 콜백
+  async function upload(blob, name, parentId, onProgress, session, onSession) {
+    const size = blob.size;
+    if (!session && size <= SIMPLE_MAX) return uploadSimple(blob, name, parentId, onProgress);
+    let url = session || null;
+    let offset = 0;
+    if (url) {
+      const st = await uploadedSoFar(url, size);
+      if (st.done) return st.done;
+      if (st.expired) url = null;
+      else offset = st.offset;
+    }
+    if (!url) {
+      url = await startSession(blob, name, parentId);
+      if (onSession) await onSession(url);
+    }
+    for (;;) {
+      const end = Math.min(offset + CHUNK, size);
+      const res = await xhrRequest('PUT', url, {
+        'Content-Range': size ? `bytes ${offset}-${end - 1}/${size}` : 'bytes */0'
+
+      }, blob.slice(offset, end), (loaded) => onProgress && onProgress((offset + loaded) / size));
+      if (res.status === 200 || res.status === 201) {
+        if (onProgress) onProgress(1);
+        return JSON.parse(res.text);
+      }
+      if (res.status === 308) { offset = nextOffset(res); continue; }
+      if (res.status === 404 || res.status === 410) {
+        if (onSession) await onSession(null);
+        const err = new Error('업로드가 만료돼 처음부터 다시 올려요');
+        err.restart = true;
+        throw err;
+      }
+      throw driveError(res.status, res.text);
+    }
+  }
+
+  // 휴대폰에서 원본이 지워진 사진을 크게 볼 때 드라이브에서 받아온다
+  async function download(fileId) {
+    if (!hasToken()) throw new AuthError('token');
+    const res = await fetch(API + '/files/' + fileId + '?alt=media', { headers: { Authorization: 'Bearer ' + token.value } });
+    if (res.status === 401) { clearToken(); throw new AuthError('token'); }
+    if (!res.ok) throw new Error('드라이브에서 불러오지 못했어요');
+    return res.blob();
+  }
+
   window.Drive = {
     AuthError, isConfigured, rootName, allowedDomain, isAllowedAccount, hasToken, connect, disconnect,
-    userInfo, ensureRoot, ensureFolder, listFolders, upload, forgetVerified
+    userInfo, ensureRoot, ensureFolder, listFolders, upload, download, forgetVerified
   };
 })();

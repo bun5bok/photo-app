@@ -154,7 +154,7 @@
           <input id="opt-data" type="checkbox">
         </label>
         <label class="setting-row toggle-row">
-          <span class="stack-2 grow"><span>원본 화질로 업로드</span><small class="muted">끄면 긴 변 1920px로 줄여서 올려요</small></span>
+          <span class="stack-2 grow"><span>원본 화질로 업로드</span><small class="muted">끄면 사진을 긴 변 1920px로 줄여서 올려요 (동영상은 그대로)</small></span>
           <input id="opt-original" type="checkbox">
         </label>
         <label class="setting-row toggle-row">
@@ -216,10 +216,18 @@
       <button class="btn btn-white" type="button" data-action="native-camera">휴대폰 카메라 앱으로 찍기</button>
     </div>
     <div id="flash" class="flash" aria-hidden="true"></div>
+    <div id="rec-badge" class="rec-badge" role="timer" hidden><span class="rec-dot"></span><span id="rec-time">00:00</span><span class="rec-max">/ 10:00</span></div>
+    <div id="zoom-label" class="zoom-label" aria-hidden="true" hidden>1.0x</div>
+    <div id="zoom-bar" class="zoom-bar" role="group" aria-label="줌"></div>
     <div id="cam-toast" class="cam-toast" role="status" hidden></div>
   </div>
 
   <div id="cam-chips" class="chips"></div>
+
+  <div class="mode-switch" role="group" aria-label="촬영 종류">
+    <button class="mode-btn" type="button" data-mode="photo" aria-pressed="true">사진</button>
+    <button class="mode-btn" type="button" data-mode="video" aria-pressed="false">동영상</button>
+  </div>
 
   <div class="cam-controls">
     <button id="cam-last" class="cam-last" type="button" data-go-close="upload" aria-label="최근 사진 보기">
@@ -231,6 +239,7 @@
     </button>
   </div>
   <input id="native-input" type="file" accept="image/*" capture="environment" hidden>
+  <input id="native-video" type="file" accept="video/*" capture="environment" hidden>
 </section>
 
 <!-- 새 폴더 -->
@@ -251,11 +260,19 @@
 
 <!-- 사진 보기 -->
 <dialog id="dlg-photo" class="viewer">
-  <img id="viewer-img" alt="">
+  <div id="viewer-stage" class="viewer-stage">
+    <img id="viewer-img" alt="" draggable="false">
+    <video id="viewer-video" controls playsinline hidden></video>
+    <p id="viewer-loading" class="viewer-loading" hidden>원본을 불러오는 중…</p>
+  </div>
   <div class="viewer-bar">
     <span id="viewer-meta" class="small"></span>
-    <button class="btn btn-small btn-white" type="button" data-action="close-viewer">닫기</button>
+    <span class="viewer-actions">
+      <a id="viewer-drive" class="btn btn-small btn-outline-light" href="#" target="_blank" rel="noopener" hidden>드라이브에서 보기</a>
+      <button class="btn btn-small btn-white" type="button" data-action="close-viewer">닫기</button>
+    </span>
   </div>
+  <p id="viewer-hint" class="viewer-hint">두 손가락으로 벌리거나 두 번 눌러 확대</p>
 </dialog>
 
 <div id="toast" class="toast" role="status" hidden></div>

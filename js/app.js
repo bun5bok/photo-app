@@ -200,6 +200,14 @@
     }[reason] || '';
   }
 
+  // 동영상 썸네일에는 재생 표시와 길이를 붙인다
+  function thumbInner(p) {
+    const img = p.thumb ? `<img src="${p.thumb}" alt="">` : '';
+    if (p.kind !== 'video') return img;
+    const len = p.duration ? fmtTime(p.duration) : '';
+    return img + `<span class="vid"><svg width="8" height="8" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 1l7 4-7 4z" fill="#fff"/></svg>${len}</span>`;
+  }
+
   function renderHome() {
     const d = new Date();
     $('#today').textContent = `${d.getMonth() + 1}월 ${d.getDate()}일 ${'일월화수목금토'[d.getDay()]}요일`;
@@ -222,7 +230,7 @@
 
     const recent = photos.slice(0, 4);
     $('#recent-grid').innerHTML = recent.length
-      ? recent.map((p) => `<button class="thumb" type="button" data-photo="${esc(p.id)}" aria-label="${esc(p.name)} 보기"><img src="${p.thumb}" alt=""></button>`).join('')
+      ? recent.map((p) => `<button class="thumb" type="button" data-photo="${esc(p.id)}" aria-label="${esc(p.name)} 보기">${thumbInner(p)}</button>`).join('')
       : '<p class="recent-empty">찍은 사진이 여기에 보여요</p>';
 
     // 현재 저장 위치를 맨 앞에, 나머지는 최근에 쓴 순서로 3개까지
@@ -284,7 +292,7 @@
       }
       const sub = p.status === 'failed' && p.error ? `<span class="small c-err ellipsis">${esc(p.error)}</span>` : `<span class="small muted">${esc(p.folderName)} · ${relTime(p.createdAt)}</span>`;
       return `<li class="upload-item">
-        <button class="thumb" type="button" data-photo="${esc(p.id)}" aria-label="${esc(p.name)} 보기"><img src="${p.thumb}" alt=""></button>
+        <button class="thumb" type="button" data-photo="${esc(p.id)}" aria-label="${esc(p.name)} 보기">${thumbInner(p)}</button>
         <span class="upload-info"><span class="name ellipsis">${esc(p.name)}</span>${sub}${bar}</span>
         ${right}
       </li>`;
@@ -338,6 +346,11 @@
   }
 
   // ---------- 카메라 ----------
+  const MAX_RECORD = 600; // 동영상 최대 10분
+  let camMode = 'photo';
+  let recTimer = null;
+  let wakeLock = null;
+
   async function openCamera() {
     if (!currentFolder()) {
       toast('먼저 사진을 올릴 폴더를 만들어 주세요');
@@ -348,45 +361,224 @@
     renderChips();
     $('#camera').hidden = false;
     $('#cam-toast').hidden = true;
-    $('#cam-error').hidden = true;
     if (location.hash !== '#camera') history.pushState({ camera: true }, '', '#camera');
+    await startCameraStream();
+  }
+
+  async function startCameraStream() {
+    $('#cam-error').hidden = true;
+    renderModeSwitch();
     try {
-      await Camera.open($('#video'));
-      $('#video').classList.toggle('mirror', Camera.facing() === 'user');
-      const torch = Camera.hasTorch();
-      $('#btn-torch').hidden = !torch;
-      $('#torch-spacer').hidden = torch;
-      $('#btn-torch').setAttribute('aria-pressed', 'false');
+      await Camera.open($('#video'), camMode);
+      afterCameraOpen();
     } catch (e) {
       $('#cam-error-text').textContent = e.message;
+      $('#cam-error').hidden = false;
+      $('#zoom-bar').hidden = true;
+    }
+  }
+
+  function afterCameraOpen() {
+    const torch = Camera.hasTorch();
+    $('#btn-torch').hidden = !torch;
+    $('#torch-spacer').hidden = torch;
+    $('#btn-torch').setAttribute('aria-pressed', 'false');
+    renderZoomBar();
+    if (camMode === 'video' && !Camera.canRecord()) {
+      $('#cam-error-text').textContent = '이 브라우저는 앱 안 동영상 녹화를 지원하지 않아요.';
       $('#cam-error').hidden = false;
     }
   }
 
-  function closeCamera(fromPopState) {
+  async function closeCamera(fromPopState) {
+    if (Camera.isRecording()) Camera.stopRecording(); // 녹화 중이면 저장하고 닫는다
     Camera.stop();
     $('#camera').hidden = true;
     if (!fromPopState && location.hash === '#camera') history.back();
   }
 
-  function camToast(folderName) {
+  function renderModeSwitch() {
+    $$('.mode-btn').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === camMode)));
+    const shutter = $('#btn-shutter');
+    shutter.classList.toggle('video', camMode === 'video');
+    shutter.setAttribute('aria-label', camMode === 'video' ? '녹화 시작' : '촬영');
+    $('[data-action="native-camera"]').textContent = camMode === 'video' ? '휴대폰 카메라 앱으로 녹화하기' : '휴대폰 카메라 앱으로 찍기';
+  }
+
+  async function setMode(next) {
+    if (next === camMode || Camera.isRecording()) return;
+    camMode = next;
+    await startCameraStream();
+  }
+
+  // 줌: 배율 버튼 + 두 손가락 벌리기
+  function zoomPresets(range) {
+    const list = [1, 2, 3, 5, 10].filter((z) => z >= range.min && z <= range.max + 0.01);
+    if (range.max > 1 && list[list.length - 1] < range.max - 0.5 && list.length < 4) list.push(Math.floor(range.max * 10) / 10);
+    return list;
+  }
+
+  function fmtZoom(z) {
+    return (Math.round(z * 10) / 10).toFixed(z < 10 ? 1 : 0).replace(/\.0$/, '') + 'x';
+  }
+
+  function renderZoomBar() {
+    const range = Camera.zoomRange();
+    const bar = $('#zoom-bar');
+    bar.hidden = range.max <= 1;
+    if (bar.hidden) return;
+    const cur = Camera.getZoom();
+    const presets = zoomPresets(range);
+    // 지금 배율에 가장 가까운 버튼을 선택 표시하고, 버튼에 없는 배율이면 그 버튼에 현재 값을 보여 준다
+    let nearest = presets[0];
+    presets.forEach((z) => { if (z <= cur + 0.05) nearest = z; });
+    bar.innerHTML = presets.map((z) => {
+      const on = z === nearest;
+      const label = on && Math.abs(cur - z) > 0.05 ? fmtZoom(cur) : fmtZoom(z);
+      return `<button class="zoom-btn" type="button" data-zoom="${z}" aria-pressed="${on}" aria-label="${fmtZoom(z)} 줌">${label}</button>`;
+    }).join('');
+  }
+
+  let zoomLabelTimer = null;
+  function showZoomLabel(z) {
+    const el = $('#zoom-label');
+    el.textContent = fmtZoom(z);
+    el.hidden = false;
+    clearTimeout(zoomLabelTimer);
+    zoomLabelTimer = setTimeout(() => { el.hidden = true; }, 700);
+  }
+
+  async function zoomTo(z) {
+    const now = await Camera.setZoom(z);
+    renderZoomBar();
+    return now;
+  }
+
+  function bindPinchZoom() {
+    const vf = $('.viewfinder');
+    const pts = new Map();
+    let start = null;
+    let pending = null;
+    vf.addEventListener('pointerdown', (e) => {
+      if (e.target.closest('button')) return;
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pts.size === 2) {
+        const [a, b] = [...pts.values()];
+        start = { d: Math.hypot(a.x - b.x, a.y - b.y), z: Camera.getZoom() };
+      }
+    });
+    vf.addEventListener('pointermove', (e) => {
+      if (!pts.has(e.pointerId)) return;
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pts.size !== 2 || !start || Camera.zoomRange().max <= 1) return;
+      const [a, b] = [...pts.values()];
+      const target = start.z * (Math.hypot(a.x - b.x, a.y - b.y) / start.d);
+      if (pending) { pending.z = target; return; }
+      pending = { z: target };
+      requestAnimationFrame(async () => {
+        const z = await zoomTo(pending.z);
+        pending = null;
+        showZoomLabel(z);
+      });
+    });
+    const end = (e) => { pts.delete(e.pointerId); if (pts.size < 2) start = null; };
+    vf.addEventListener('pointerup', end);
+    vf.addEventListener('pointercancel', end);
+    vf.addEventListener('pointerleave', end);
+  }
+
+  function camToast(folderName, isVideo) {
     const el = $('#cam-toast');
-    el.innerHTML = `<span class="ok-dot"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#1E7B4A" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg></span><span><strong>${esc(folderName)}</strong> 폴더에 저장됨 · ${Uploader.hold() ? '연결되면 업로드' : '업로드 중'}</span>`;
+    el.innerHTML = `<span class="ok-dot"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#1E7B4A" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg></span><span>${isVideo ? '동영상이 ' : ''}<strong>${esc(folderName)}</strong> 폴더에 저장됨 · ${Uploader.hold() ? '연결되면 업로드' : '업로드 중'}</span>`;
     el.hidden = false;
     clearTimeout(camToastTimer);
     camToastTimer = setTimeout(() => { el.hidden = true; }, 2500);
   }
 
-  async function savePhoto(blob) {
+  async function savePhoto(blob, opts) {
     const folder = currentFolder();
     if (!blob || !folder) return;
-    await Uploader.add(blob, folder);
+    await Uploader.add(blob, folder, opts);
     shotsThisSession++;
     await refresh();
-    camToast(folder.name);
+    camToast(folder.name, /^video\//.test(blob.type));
+  }
+
+  // 휴대폰 카메라 앱으로 찍은 동영상의 미리보기와 길이를 만든다
+  function videoInfo(blob) {
+    return new Promise((resolve) => {
+      const v = document.createElement('video');
+      const url = URL.createObjectURL(blob);
+      let done = false;
+      const finish = (thumb) => {
+        if (done) return;
+        done = true;
+        const duration = isFinite(v.duration) ? Math.round(v.duration) : null;
+        URL.revokeObjectURL(url);
+        resolve({ thumb: thumb || '', duration });
+      };
+      v.muted = true;
+      v.playsInline = true;
+      v.preload = 'auto';
+      v.onloadeddata = () => { try { v.currentTime = Math.min(0.5, (v.duration || 1) / 2); } catch (e) { finish(''); } };
+      v.onseeked = () => {
+        const scale = 320 / Math.max(v.videoWidth || 1, v.videoHeight || 1);
+        const c = document.createElement('canvas');
+        c.width = Math.round(v.videoWidth * scale) || 320;
+        c.height = Math.round(v.videoHeight * scale) || 180;
+        try { c.getContext('2d').drawImage(v, 0, 0, c.width, c.height); finish(c.toDataURL('image/jpeg', 0.75)); } catch (e) { finish(''); }
+      };
+      v.onerror = () => finish('');
+      setTimeout(() => finish(''), 5000);
+      v.src = url;
+    });
+  }
+
+  function fmtTime(sec) {
+    const m = Math.floor(sec / 60), s = sec % 60;
+    return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+  }
+
+  function setRecordingUi(on) {
+    $('#btn-shutter').classList.toggle('recording', on);
+    $('#btn-shutter').setAttribute('aria-label', on ? '녹화 멈춤' : '녹화 시작');
+    $('.mode-switch').classList.toggle('locked', on);
+    $('#btn-flip').disabled = on;
+    $('#rec-badge').hidden = !on;
+    $('#rec-badge').classList.remove('near-end');
+    $('#rec-time').textContent = '00:00';
+  }
+
+  async function toggleRecording() {
+    if (Camera.isRecording()) {
+      Camera.stopRecording();
+      return;
+    }
+    let result;
+    const done = Camera.startRecording();
+    setRecordingUi(true);
+    if (navigator.vibrate) navigator.vibrate(30);
+    try { if (navigator.wakeLock) wakeLock = await navigator.wakeLock.request('screen'); } catch (e) { /* 화면 꺼짐 방지 미지원 */ }
+    recTimer = setInterval(() => {
+      const sec = Camera.elapsed();
+      $('#rec-time').textContent = fmtTime(sec);
+      $('#rec-badge').classList.toggle('near-end', sec >= MAX_RECORD - 30);
+      if (sec >= MAX_RECORD) { Camera.stopRecording(); toast('최대 10분이 되어 녹화를 마쳤어요'); }
+    }, 500);
+    try {
+      result = await done;
+    } catch (e) {
+      toast(e.message || '녹화하지 못했어요');
+    } finally {
+      clearInterval(recTimer);
+      setRecordingUi(false);
+      if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+    }
+    if (result) await savePhoto(result.blob, { thumb: result.thumb, duration: result.duration, startedAt: result.startedAt });
   }
 
   async function shoot() {
+    if (camMode === 'video') return toggleRecording();
     const btn = $('#btn-shutter');
     if (btn.disabled) return;
     btn.disabled = true;
@@ -413,22 +605,179 @@
     setTimeout(() => $('#new-folder-name').focus(), 50);
   }
 
+  // ---------- 크게 보기 (두 손가락 확대, 두 번 눌러 확대, 끌어서 이동) ----------
+  const view = { s: 1, x: 0, y: 0 };
+  let viewerUrl = null;
+  let viewerToken = 0;
+
+  function applyView() {
+    $('#viewer-img').style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.s})`;
+  }
+
+  function resetView() {
+    view.s = 1; view.x = 0; view.y = 0;
+    applyView();
+  }
+
+  // 확대한 사진이 화면 밖으로 너무 벗어나지 않게 붙잡는다
+  function clampView() {
+    const r = $('#viewer-stage').getBoundingClientRect();
+    if (view.s <= 1) { view.s = 1; view.x = 0; view.y = 0; return; }
+    // 화면에 맞춰 줄어든 실제 사진 영역(위아래나 양옆의 검은 여백 제외)을 기준으로 한다
+    const img = $('#viewer-img');
+    const ratio = img.naturalWidth && img.naturalHeight ? img.naturalWidth / img.naturalHeight : r.width / r.height;
+    const cw = Math.min(r.width, r.height * ratio), ch = cw / ratio;
+    const ox = (r.width - cw) / 2, oy = (r.height - ch) / 2;
+    const fit = (pos, stage, size, off) => {
+      if (size * view.s <= stage) return (stage - size * view.s) / 2 - off * view.s;
+      return Math.min(-off * view.s, Math.max(stage - (off + size) * view.s, pos));
+    };
+    view.x = fit(view.x, r.width, cw, ox);
+    view.y = fit(view.y, r.height, ch, oy);
+  }
+
+  function zoomAt(px, py, nextScale) {
+    const s = Math.min(5, Math.max(1, nextScale));
+    view.x = px - (px - view.x) * (s / view.s);
+    view.y = py - (py - view.y) * (s / view.s);
+    view.s = s;
+    clampView();
+    applyView();
+  }
+
+  function bindViewerGestures() {
+    const stage = $('#viewer-stage');
+    const pts = new Map();
+    let pinch = null;
+    let pan = null;
+    let lastTap = 0;
+    const local = (e) => { const r = stage.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+
+    stage.addEventListener('pointerdown', (e) => {
+      if ($('#viewer-img').hidden) return;
+      stage.setPointerCapture(e.pointerId);
+      pts.set(e.pointerId, local(e));
+      $('#viewer-hint').classList.add('gone');
+      if (pts.size === 2) {
+        const [a, b] = [...pts.values()];
+        pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), s: view.s, mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2, x: view.x, y: view.y };
+        pan = null;
+      } else if (pts.size === 1) {
+        const p = local(e);
+        pan = { px: p.x, py: p.y, x: view.x, y: view.y };
+        const now = Date.now();
+        if (now - lastTap < 300) {
+          zoomAt(p.x, p.y, view.s > 1 ? 1 : 2.5);
+          lastTap = 0;
+          pan = null;
+        } else {
+          lastTap = now;
+        }
+      }
+    });
+    stage.addEventListener('pointermove', (e) => {
+      if (!pts.has(e.pointerId)) return;
+      pts.set(e.pointerId, local(e));
+      if (pinch && pts.size === 2) {
+        const [a, b] = [...pts.values()];
+        const s = Math.min(5, Math.max(1, pinch.s * Math.hypot(a.x - b.x, a.y - b.y) / pinch.d));
+        const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+        view.x = mx - (pinch.mx - pinch.x) * (s / pinch.s);
+        view.y = my - (pinch.my - pinch.y) * (s / pinch.s);
+        view.s = s;
+        clampView();
+        applyView();
+      } else if (pan && view.s > 1) {
+        const p = local(e);
+        view.x = pan.x + (p.x - pan.px);
+        view.y = pan.y + (p.y - pan.py);
+        clampView();
+        applyView();
+      }
+    });
+    const end = (e) => {
+      pts.delete(e.pointerId);
+      if (pts.size < 2) pinch = null;
+      if (pts.size === 1) {
+        const p = [...pts.values()][0];
+        pan = { px: p.x, py: p.y, x: view.x, y: view.y };
+      }
+      if (!pts.size) pan = null;
+    };
+    stage.addEventListener('pointerup', end);
+    stage.addEventListener('pointercancel', end);
+    // 컴퓨터에서는 마우스 휠로 확대
+    stage.addEventListener('wheel', (e) => {
+      if ($('#viewer-img').hidden) return;
+      e.preventDefault();
+      const p = local(e);
+      zoomAt(p.x, p.y, view.s * (e.deltaY < 0 ? 1.2 : 1 / 1.2));
+    }, { passive: false });
+  }
+
+  function driveLink(p) {
+    return p.webViewLink || (p.driveFileId ? `https://drive.google.com/file/d/${p.driveFileId}/view` : '');
+  }
+
+  function clearViewerMedia() {
+    if (viewerUrl) URL.revokeObjectURL(viewerUrl);
+    viewerUrl = null;
+    const vid = $('#viewer-video');
+    vid.pause();
+    vid.removeAttribute('src');
+    vid.load();
+  }
+
   async function openViewer(id) {
     const p = await Store.photos.get(id);
     if (!p) return;
+    const token = ++viewerToken;
+    clearViewerMedia();
+    resetView();
     const img = $('#viewer-img');
-    if (img.dataset.url) URL.revokeObjectURL(img.dataset.url);
-    if (p.blob) {
-      const url = URL.createObjectURL(p.blob);
-      img.dataset.url = url;
-      img.src = url;
+    const vid = $('#viewer-video');
+    const isVideo = p.kind === 'video';
+    const link = driveLink(p);
+    $('#viewer-loading').hidden = true;
+    $('#viewer-drive').hidden = !link;
+    if (link) $('#viewer-drive').href = link;
+
+    if (isVideo && p.blob) {
+      // 아직 휴대폰에 있는 동영상은 바로 재생
+      viewerUrl = URL.createObjectURL(p.blob);
+      vid.src = viewerUrl;
+      vid.hidden = false;
+      img.hidden = true;
+      $('#viewer-hint').hidden = true;
     } else {
-      img.dataset.url = '';
-      img.src = p.thumb;
+      // 사진, 또는 이미 올라가 휴대폰에서 지운 동영상(미리보기 + 드라이브 링크)
+      vid.hidden = true;
+      img.hidden = false;
+      img.alt = p.name;
+      $('#viewer-hint').hidden = isVideo;
+      $('#viewer-hint').classList.remove('gone');
+      setTimeout(() => $('#viewer-hint').classList.add('gone'), 2500);
+      if (p.blob) {
+        viewerUrl = URL.createObjectURL(p.blob);
+        img.src = viewerUrl;
+      } else {
+        img.src = p.thumb;
+        // 올라간 사진은 휴대폰에 작은 미리보기만 있으니, 연결돼 있으면 드라이브에서 원본을 받아와 선명하게 보여 준다
+        if (!isVideo && p.driveFileId && Drive.hasToken()) {
+          $('#viewer-loading').hidden = false;
+          Drive.download(p.driveFileId).then((blob) => {
+            if (token !== viewerToken) return;
+            viewerUrl = URL.createObjectURL(blob);
+            img.src = viewerUrl;
+          }).catch(() => {}).finally(() => {
+            if (token === viewerToken) $('#viewer-loading').hidden = true;
+          });
+        }
+      }
     }
-    img.alt = p.name;
     const where = p.status === 'done' ? '드라이브에 올라감' : p.status === 'failed' ? '업로드 실패' : '업로드 대기';
-    $('#viewer-meta').textContent = `${p.folderName} · ${p.name} · ${where}`;
+    const len = isVideo && p.duration ? ` · ${fmtTime(p.duration)}` : '';
+    $('#viewer-meta').textContent = `${p.folderName} · ${p.name}${len} · ${where}`;
     $('#dlg-photo').showModal();
   }
 
@@ -450,13 +799,15 @@
       if (t.dataset.retry) return Uploader.retry(t.dataset.retry);
       if (t.dataset.photo) return openViewer(t.dataset.photo);
       if (t.dataset.goClose) { closeCamera(); setTab(t.dataset.goClose); return; }
+      if (t.dataset.mode) return setMode(t.dataset.mode);
+      if (t.dataset.zoom) return zoomTo(Number(t.dataset.zoom)).then(showZoomLabel);
       switch (t.dataset.action) {
         case 'open-camera': return openCamera();
         case 'close-camera': return closeCamera();
         case 'new-folder': return openFolderDialog();
         case 'close-dialog': return t.closest('dialog').close();
         case 'close-viewer': return $('#dlg-photo').close();
-        case 'native-camera': return $('#native-input').click();
+        case 'native-camera': return $(camMode === 'video' ? '#native-video' : '#native-input').click();
       }
     });
 
@@ -466,12 +817,10 @@
     $('#btn-retry-all').addEventListener('click', () => Uploader.retryAll());
     $('#btn-shutter').addEventListener('click', shoot);
     $('#btn-flip').addEventListener('click', async () => {
+      if (Camera.isRecording()) return;
       try {
         await Camera.flip();
-        $('#video').classList.toggle('mirror', Camera.facing() === 'user');
-        const torch = Camera.hasTorch();
-        $('#btn-torch').hidden = !torch;
-        $('#torch-spacer').hidden = torch;
+        afterCameraOpen();
       } catch (e) { toast(e.message); }
     });
     $('#btn-torch').addEventListener('click', async (e) => {
@@ -483,15 +832,28 @@
       e.target.value = '';
       if (file) await savePhoto(file);
     });
+    $('#native-video').addEventListener('change', async (e) => {
+      const file = e.target.files && e.target.files[0];
+      e.target.value = '';
+      if (!file) return;
+      const info = await videoInfo(file);
+      await savePhoto(file, { thumb: info.thumb, duration: info.duration, startedAt: file.lastModified || Date.now() });
+    });
+    // 녹화 중에 다른 앱으로 넘어가면 브라우저가 카메라를 끊으니, 그때까지 찍은 것을 저장한다
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden && Camera.isRecording()) Camera.stopRecording();
+    });
 
     $('#form-folder').addEventListener('submit', (e) => {
       if (e.submitter && e.submitter.value === 'ok') createFolder($('#new-folder-name').value);
     });
     $('#dlg-photo').addEventListener('close', () => {
-      const img = $('#viewer-img');
-      if (img.dataset.url) URL.revokeObjectURL(img.dataset.url);
-      img.dataset.url = '';
+      viewerToken++;
+      clearViewerMedia();
+      $('#viewer-img').removeAttribute('src');
     });
+    bindViewerGestures();
+    bindPinchZoom();
 
     $('#folder-search').addEventListener('input', renderFolderList);
 

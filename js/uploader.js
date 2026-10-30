@@ -42,35 +42,47 @@
     return `${date.getFullYear()}${p(date.getMonth() + 1)}${p(date.getDate())}_${p(date.getHours())}${p(date.getMinutes())}${p(date.getSeconds())}`;
   }
 
-  async function uniqueName(base) {
+  async function uniqueName(base, ext) {
     const all = await Store.photos.all();
     const names = new Set(all.map((p) => p.name));
-    let name = base + '.jpg';
-    for (let i = 2; names.has(name); i++) name = `${base}_${i}.jpg`;
+    let name = `${base}.${ext}`;
+    for (let i = 2; names.has(name); i++) name = `${base}_${i}.${ext}`;
     return name;
   }
 
-  async function add(blob, folder) {
+  function videoExt(type) {
+    return /mp4/.test(type) ? 'mp4' : /quicktime/.test(type) ? 'mov' : 'webm';
+  }
+
+  // 동영상은 크기를 줄이지 않고 그대로 올린다. 미리보기는 촬영 화면이 만든 thumb를 쓴다
+  // opts: { thumb, duration, startedAt }
+  async function add(blob, folder, opts) {
+    opts = opts || {};
     const settings = Store.getSettings();
-    const img = await loadImage(blob);
-    const thumb = drawScaled(img, 320).toDataURL('image/jpeg', 0.75);
+    const isVideo = /^video\//.test(blob.type);
+    let thumb = opts.thumb || '';
     let data = blob;
-    if (!settings.original) {
-      data = await canvasToBlob(drawScaled(img, 1920), 0.88);
+    if (!isVideo) {
+      const img = await loadImage(blob);
+      thumb = drawScaled(img, 320).toDataURL('image/jpeg', 0.75);
+      if (!settings.original) data = await canvasToBlob(drawScaled(img, 1920), 0.88);
+      if (img.close) img.close();
     }
-    if (img.close) img.close();
-    const now = new Date();
+    const now = opts.startedAt ? new Date(opts.startedAt) : new Date();
     const photo = {
       id: Store.uid(),
-      name: await uniqueName(fileName(now)),
+      kind: isVideo ? 'video' : 'photo',
+      name: await uniqueName(fileName(now), isVideo ? videoExt(blob.type) : 'jpg'),
       folderId: folder.id,
       folderName: folder.name,
       blob: data,
       size: data.size,
+      duration: opts.duration || null,
       thumb,
       status: 'waiting',
       attempts: 0,
       error: null,
+      uploadUrl: null,
       createdAt: now.getTime(),
       doneAt: null
     };
@@ -122,11 +134,11 @@
     const file = await Drive.upload(photo.blob, photo.name, driveId, (ratio) => {
       progress.set(photo.id, ratio);
       if (Date.now() - last > 150) { last = Date.now(); emit('progress', { id: photo.id, ratio }); }
-    });
+    }, photo.uploadUrl, (url) => Store.photos.update(photo.id, { uploadUrl: url }));
 
     progress.delete(photo.id);
     // 올라간 사진은 원본을 지워 휴대폰 저장 공간을 아낀다 (썸네일만 남김)
-    await Store.photos.update(photo.id, { status: 'done', blob: null, doneAt: Date.now(), driveFileId: file.id, webViewLink: file.webViewLink || null, error: null });
+    await Store.photos.update(photo.id, { status: 'done', blob: null, uploadUrl: null, doneAt: Date.now(), driveFileId: file.id, webViewLink: file.webViewLink || null, error: null });
 
     const fs = Store.getFolders();
     const i = fs.findIndex((f) => f.id === photo.folderId);
@@ -152,6 +164,10 @@
             await Store.photos.update(photo.id, { status: 'waiting' });
             setHold('auth');
             break;
+          }
+          if (err.restart) {
+            await Store.photos.update(photo.id, { status: 'waiting', uploadUrl: null });
+            continue;
           }
           if (err.network || !navigator.onLine) {
             await Store.photos.update(photo.id, { status: 'waiting' });
