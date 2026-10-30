@@ -71,10 +71,16 @@
           </div>
           <button class="btn-ghost-light" type="button" data-go="folders">변경</button>
         </div>
-        <button class="btn btn-white" type="button" data-action="open-camera">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8a2 2 0 0 1 2-2h2l1.5-2h5L16 6h2a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><circle cx="12" cy="13" r="3.5"/></svg>
-          바로 촬영
-        </button>
+        <div class="target-actions">
+          <button class="btn btn-white" type="button" data-action="open-camera">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8a2 2 0 0 1 2-2h2l1.5-2h5L16 6h2a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><circle cx="12" cy="13" r="3.5"/></svg>
+            바로 촬영
+          </button>
+          <button class="btn btn-glass" type="button" data-action="pick-gallery">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M21 16l-5-5-8 8"/></svg>
+            앨범에서
+          </button>
+        </div>
       </section>
 
       <button class="card progress-card" type="button" data-go="upload">
@@ -109,7 +115,7 @@
         <span class="sr-only">폴더 검색</span>
         <input id="folder-search" type="search" placeholder="폴더 이름 검색" autocomplete="off">
       </label>
-      <p class="muted small">폴더를 누르면 저장 위치로 지정돼요</p>
+      <p class="muted small">폴더를 누르면 사진을 볼 수 있어요. ⋯ 를 누르면 저장 위치 지정·이름 바꾸기·삭제</p>
       <ul id="folder-list" class="folder-list"></ul>
     </section>
 
@@ -119,7 +125,21 @@
         <button class="icon-btn" type="button" data-action="close-folder" aria-label="뒤로">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>
         </button>
+        <span class="fv-head-right">
+          <button id="fv-select" class="btn btn-small btn-outline" type="button" data-action="select-start">선택</button>
+          <button class="icon-btn" type="button" data-action="fv-menu" aria-label="폴더 메뉴">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="19" cy="12" r="1.9"/></svg>
+          </button>
+        </span>
       </header>
+      <!-- 선택 모드일 때 위쪽 바 -->
+      <div id="select-bar" class="select-bar" hidden>
+        <button class="icon-btn" type="button" data-action="select-end" aria-label="선택 끝내기">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+        <strong id="select-count" class="grow">0개 선택</strong>
+        <button id="select-all" class="btn-link" type="button" data-action="select-all">전체 선택</button>
+      </div>
       <div class="stack-4">
         <h1 id="fv-title" class="h1">폴더</h1>
         <span id="fv-path" class="muted small"></span>
@@ -137,18 +157,41 @@
       <p id="fv-empty" class="empty" hidden>아직 이 폴더에 사진이 없어요</p>
       <button id="fv-more" class="btn btn-outline" type="button" data-action="fv-more" hidden>더 보기</button>
       <p id="fv-loading" class="muted small center" hidden>드라이브에서 불러오는 중…</p>
-      <button class="btn btn-dark btn-lg" type="button" data-action="fv-shoot">
+      <button id="fv-shoot" class="btn btn-dark btn-lg" type="button" data-action="fv-shoot">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8a2 2 0 0 1 2-2h2l1.5-2h5L16 6h2a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><circle cx="12" cy="13" r="3.5"/></svg>
         이 폴더로 촬영
       </button>
     </section>
 
+    <!-- 선택 모드일 때 아래쪽 버튼 -->
+    <div id="select-actions" class="select-actions" hidden>
+      <button class="sel-btn" type="button" data-action="sel-move">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M10 13h6M13 10l3 3-3 3" stroke-linecap="round"/></svg>
+        폴더 옮기기
+      </button>
+      <button class="sel-btn sel-save" type="button" data-action="sel-save">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M12 7v7"/><path d="M9 11l3 3 3-3"/><path d="M10.5 18.5h3"/></svg>
+        휴대폰에 저장
+      </button>
+      <button class="sel-btn sel-del" type="button" data-action="sel-delete">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/></svg>
+        삭제
+      </button>
+    </div>
+
     <!-- 업로드 -->
     <section id="tab-upload" class="panel" aria-labelledby="upload-title" hidden>
       <header class="page-head">
         <h1 id="upload-title" class="h1">업로드</h1>
-        <button id="btn-retry-all" class="btn btn-small btn-outline" type="button" hidden>모두 다시 시도</button>
+        <span class="head-actions">
+          <button id="btn-retry-all" class="btn btn-small btn-outline" type="button" hidden>모두 다시 시도</button>
+          <button class="btn btn-small btn-dark" type="button" data-action="pick-gallery">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+            앨범에서
+          </button>
+        </span>
       </header>
+      <input id="gallery-input" type="file" accept="image/*,video/*" multiple hidden>
       <div class="stats">
         <div class="stat"><span class="muted small">진행 중</span><strong id="stat-active" class="c-accent">0</strong></div>
         <div class="stat"><span class="muted small">오늘 완료</span><strong id="stat-done" class="c-ok">0</strong></div>
@@ -295,21 +338,88 @@
     <video id="viewer-video" controls playsinline hidden></video>
     <p id="viewer-loading" class="viewer-loading" hidden>원본을 불러오는 중…</p>
   </div>
-  <div class="viewer-bar">
-    <span id="viewer-meta" class="small"></span>
-    <span class="viewer-actions">
-      <a id="viewer-drive" class="btn btn-small btn-outline-light" href="#" target="_blank" rel="noopener" hidden>드라이브에서 보기</a>
-      <button class="btn btn-small btn-white" type="button" data-action="close-viewer">닫기</button>
-    </span>
+  <p id="viewer-meta" class="viewer-meta small"></p>
+  <div class="viewer-tools">
+    <a id="viewer-drive" class="vt-btn" href="#" target="_blank" rel="noopener" hidden>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>
+      드라이브
+    </a>
+    <button class="vt-btn" type="button" data-action="viewer-move">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+      옮기기
+    </button>
+    <button class="vt-btn" type="button" data-action="viewer-save">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M12 7v7"/><path d="M9 11l3 3 3-3"/></svg>
+      저장
+    </button>
+    <button class="vt-btn vt-del" type="button" data-action="viewer-delete">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/></svg>
+      삭제
+    </button>
   </div>
+  <button class="viewer-close" type="button" data-action="close-viewer">닫기</button>
   <p id="viewer-hint" class="viewer-hint">두 손가락으로 벌리거나 두 번 눌러 확대</p>
 </dialog>
 
-<div id="toast" class="toast" role="status" hidden></div>
+<!-- 아래에서 올라오는 메뉴 (폴더 메뉴, 옮길 폴더 고르기) -->
+<dialog id="dlg-sheet" class="action-sheet">
+  <span class="sheet-grip" aria-hidden="true"></span>
+  <strong id="sheet-title" class="sheet-title"></strong>
+  <span id="sheet-sub" class="sheet-sub muted small" hidden></span>
+  <div id="sheet-items" class="sheet-items"></div>
+  <button class="btn sheet-cancel" type="button" data-action="close-dialog">닫기</button>
+</dialog>
+
+<!-- 폴더 이름 바꾸기 -->
+<dialog id="dlg-rename" class="sheet">
+  <form method="dialog" id="form-rename">
+    <h2 class="h2">폴더 이름 바꾸기</h2>
+    <label class="field">
+      <span>새 이름</span>
+      <input id="rename-input" type="text" maxlength="60" required>
+    </label>
+    <p id="rename-error" class="small c-err" hidden></p>
+    <p class="muted small">드라이브 폴더 이름도 같이 바뀌어요. 아직 올라가지 않은 사진도 새 이름 폴더로 올라가요.</p>
+    <div class="sheet-actions">
+      <button class="btn btn-outline" type="button" data-action="close-dialog">취소</button>
+      <button class="btn btn-primary" type="submit" value="ok">저장</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- 확인 창 (폴더 삭제, 올라가지 않은 사진 삭제) -->
+<dialog id="dlg-confirm" class="sheet">
+  <div class="confirm">
+    <span class="confirm-icon" aria-hidden="true">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/></svg>
+    </span>
+    <h2 id="confirm-title" class="h2"></h2>
+    <div id="confirm-body" class="confirm-body"></div>
+    <div class="confirm-actions">
+      <button class="btn btn-outline" type="button" data-action="confirm-no">취소</button>
+      <button id="confirm-yes" class="btn btn-danger" type="button" data-action="confirm-yes">삭제</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- 휴대폰 저장: 준비가 끝나면 사용자가 눌러야 저장 창을 열 수 있다 -->
+<dialog id="dlg-save" class="sheet">
+  <div class="confirm">
+    <h2 id="save-title" class="h2">휴대폰에 저장할 준비가 됐어요</h2>
+    <p id="save-body" class="muted small"></p>
+    <div class="confirm-actions">
+      <button class="btn btn-outline" type="button" data-action="close-dialog">취소</button>
+      <button id="save-go" class="btn btn-primary" type="button" data-action="save-go">앨범에 저장</button>
+    </div>
+  </div>
+</dialog>
+
+<div id="toast" class="toast" role="status" hidden><span id="toast-text"></span><button id="toast-action" class="toast-action" type="button" hidden></button></div>
 
 <script src="js/store.js"></script>
 <script src="js/drive.js"></script>
 <script src="js/uploader.js"></script>
+<script src="js/media-date.js"></script>
 <script src="js/camera.js"></script>
 <script src="js/app.js"></script>
 </body>

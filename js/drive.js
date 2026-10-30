@@ -185,11 +185,40 @@
   // 폴더 안의 사진·동영상을 최근 것부터 가져온다 (다른 휴대폰에서 올린 것 포함)
   async function listFiles(folderId, pageToken) {
     const query = `'${folderId}' in parents and mimeType!='${FOLDER_MIME}' and trashed=false`;
-    const fields = 'nextPageToken,files(id,name,mimeType,thumbnailLink,createdTime,webViewLink,videoMediaMetadata(durationMillis))';
-    let path = `/files?pageSize=60&orderBy=createdTime desc&fields=${encodeURIComponent(fields)}&q=${encodeURIComponent(query)}`;
+    const fields = 'nextPageToken,files(id,name,mimeType,thumbnailLink,createdTime,modifiedTime,webViewLink,videoMediaMetadata(durationMillis))';
+    let path = `/files?pageSize=60&orderBy=modifiedTime desc&fields=${encodeURIComponent(fields)}&q=${encodeURIComponent(query)}`;
     if (pageToken) path += '&pageToken=' + encodeURIComponent(pageToken);
     return api(path);
   }
+
+  // 폴더 안 파일 개수 (폴더 삭제 확인 창에 보여 줄 때)
+  async function countFiles(folderId) {
+    const query = `'${folderId}' in parents and mimeType!='${FOLDER_MIME}' and trashed=false`;
+    let count = 0;
+    let token = null;
+    do {
+      let path = `/files?pageSize=1000&fields=nextPageToken,files(id)&q=${encodeURIComponent(query)}`;
+      if (token) path += '&pageToken=' + encodeURIComponent(token);
+      const r = await api(path);
+      count += (r.files || []).length;
+      token = r.nextPageToken;
+    } while (token);
+    return count;
+  }
+
+  function patch(fileId, body, params) {
+    return api('/files/' + fileId + '?fields=id' + (params || ''), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {})
+    });
+  }
+
+  // 휴지통으로 보내기 / 되살리기 (휴지통은 30일 뒤 드라이브가 비운다)
+  const trash = (fileId) => patch(fileId, { trashed: true });
+  const untrash = (fileId) => patch(fileId, { trashed: false });
+  const rename = (fileId, name) => patch(fileId, { name });
+  const move = (fileId, fromId, toId) => patch(fileId, {}, `&addParents=${encodeURIComponent(toId)}&removeParents=${encodeURIComponent(fromId)}`);
 
   // ---------- 재개 가능 업로드 (동영상 같은 큰 파일도 끊긴 곳부터 이어서 올린다) ----------
   const CHUNK = 8 * 1024 * 1024; // 256KB의 배수여야 한다
@@ -227,12 +256,12 @@
     return m ? Number(m[1]) + 1 : 0;
   }
 
-  async function startSession(blob, name, parentId) {
+  async function startSession(blob, meta, parentId) {
     const res = await xhrRequest('POST', UPLOAD + '?uploadType=resumable&fields=id,name,webViewLink', {
       'Content-Type': 'application/json; charset=UTF-8',
       'X-Upload-Content-Type': blob.type || 'application/octet-stream',
       'X-Upload-Content-Length': String(blob.size)
-    }, JSON.stringify({ name, parents: [parentId] }));
+    }, JSON.stringify(Object.assign({}, meta, { parents: [parentId] })));
     const location = res.xhr.getResponseHeader('Location');
     if (res.status !== 200 || !location) throw driveError(res.status, res.text);
     return location;
@@ -249,10 +278,10 @@
   // 5MB 이하는 한 번에 올린다 (드라이브의 간단 업로드 한도)
   const SIMPLE_MAX = 5 * 1024 * 1024;
 
-  async function uploadSimple(blob, name, parentId, onProgress) {
+  async function uploadSimple(blob, meta, parentId, onProgress) {
     const boundary = 'photoapp' + Math.random().toString(36).slice(2);
     const body = new Blob([
-      `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify({ name, parents: [parentId] })}\r\n`,
+      `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(Object.assign({}, meta, { parents: [parentId] }))}\r\n`,
       `--${boundary}\r\nContent-Type: ${blob.type || 'application/octet-stream'}\r\n\r\n`,
       blob,
       `\r\n--${boundary}--`
@@ -265,10 +294,11 @@
   }
 
   // 큰 파일은 8MB씩 나눠 올리고, 끊기면 서버가 받은 곳부터 이어서 올린다
+  // meta: 드라이브 파일 정보 { name, modifiedTime }
   // session: 이전에 시작한 업로드 주소 (없으면 새로 시작), onSession: 새 주소를 저장할 콜백
-  async function upload(blob, name, parentId, onProgress, session, onSession) {
+  async function upload(blob, meta, parentId, onProgress, session, onSession) {
     const size = blob.size;
-    if (!session && size <= SIMPLE_MAX) return uploadSimple(blob, name, parentId, onProgress);
+    if (!session && size <= SIMPLE_MAX) return uploadSimple(blob, meta, parentId, onProgress);
     let url = session || null;
     let offset = 0;
     if (url) {
@@ -278,7 +308,7 @@
       else offset = st.offset;
     }
     if (!url) {
-      url = await startSession(blob, name, parentId);
+      url = await startSession(blob, meta, parentId);
       if (onSession) await onSession(url);
     }
     for (;;) {
@@ -313,6 +343,7 @@
 
   window.Drive = {
     AuthError, isConfigured, rootName, allowedDomain, isAllowedAccount, hasToken, connect, disconnect,
-    userInfo, ensureRoot, ensureFolder, listFolders, listFiles, upload, download, forgetVerified
+    userInfo, ensureRoot, ensureFolder, listFolders, listFiles, countFiles, upload, download, forgetVerified,
+    trash, untrash, rename, move
   };
 })();

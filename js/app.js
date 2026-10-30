@@ -16,12 +16,17 @@
     return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
 
-  function toast(msg) {
+  let toastFn = null;
+  function toast(msg, actionLabel, onAction, ms) {
     const el = $('#toast');
-    el.textContent = msg;
+    $('#toast-text').textContent = msg;
+    const btn = $('#toast-action');
+    btn.hidden = !actionLabel;
+    btn.textContent = actionLabel || '';
+    toastFn = onAction || null;
     el.hidden = false;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { el.hidden = true; }, 3000);
+    if (ms !== 0) toastTimer = setTimeout(() => { el.hidden = true; toastFn = null; }, ms || (actionLabel ? 5000 : 3000));
   }
 
   function relTime(ts) {
@@ -56,11 +61,15 @@
   }
 
   async function createFolder(name) {
+    // 사진을 옮기다가 '새 폴더 만들어 옮기기'로 온 경우: 저장 위치는 그대로 두고 만든 폴더로 옮긴다
+    const pendingMove = moveAfterCreate;
+    moveAfterCreate = null;
     name = name.trim().replace(/[\\/]/g, '·');
     if (!name) return;
     const list = folders();
-    const dup = list.find((f) => f.name === name);
+    const dup = list.find((f) => f.name.toLowerCase() === name.toLowerCase());
     if (dup) {
+      if (pendingMove) return moveItems(pendingMove.items, pendingMove.fromId, dup.id).then(pendingMove.done);
       pickFolder(dup.id);
       toast('이미 있는 폴더라 저장 위치로 지정했어요');
       return;
@@ -68,6 +77,10 @@
     const folder = { id: Store.uid(), name, driveId: null, count: 0, lastAt: null };
     list.push(folder);
     Store.setFolders(list);
+    if (pendingMove) {
+      render();
+      return moveItems(pendingMove.items, pendingMove.fromId, folder.id).then(pendingMove.done);
+    }
     Store.setCurrent(folder.id);
     render();
     toast(`‘${name}’ 폴더를 만들었어요`);
@@ -189,6 +202,13 @@
   }
 
   function closeFolderView(fromPopState, keepTab) {
+    if (sel.on) {
+      sel.on = false;
+      sel.ids.clear();
+      document.body.classList.remove('selecting');
+      $('#select-bar').hidden = true;
+      $('#select-actions').hidden = true;
+    }
     fv.folderId = null;
     fvQueue = [];
     $('#folder-view').hidden = true;
@@ -237,10 +257,10 @@
       webViewLink: f.webViewLink,
       thumbLink: f.thumbnailLink ? f.thumbnailLink.replace(/=s\d+$/, '=s400') : '',
       duration: f.videoMediaMetadata && f.videoMediaMetadata.durationMillis ? Math.round(f.videoMediaMetadata.durationMillis / 1000) : null,
-      createdAt: Date.parse(f.createdTime) || 0,
+      createdAt: Date.parse(f.modifiedTime || f.createdTime) || 0,
       status: 'done'
     }));
-    return local.concat(remote).sort((a, b) => b.createdAt - a.createdAt);
+    return local.concat(remote).sort((a, b) => (b.takenAt || b.createdAt) - (a.takenAt || a.createdAt));
   }
 
   const PH_SVG = '<span class="ph"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M21 16l-5-5-8 8"/></svg></span>';
@@ -260,7 +280,12 @@
     if (p.status === 'uploading') state = `<span class="state"><span class="up">${Math.round((Uploader.progressOf(p.id) || 0) * 100)}%</span></span>`;
     else if (p.status === 'waiting') state = '<span class="state"><span>대기</span></span>';
     else if (p.status === 'failed') state = '<span class="state"><span class="fail">실패</span></span>';
-    return `<button class="thumb" type="button" data-fv-item="${esc(p.id)}" data-fv-remote="${p.remote ? 1 : 0}" aria-label="${esc(p.name)} 보기">${inner}${state}</button>`;
+    if (!sel.on) {
+      return `<button class="thumb" type="button" data-fv-item="${esc(p.id)}" data-fv-remote="${p.remote ? 1 : 0}" aria-label="${esc(p.name)} 보기">${inner}${state}</button>`;
+    }
+    const on = sel.ids.has(p.id);
+    const chk = `<span class="chk">${on ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg>' : ''}</span>`;
+    return `<button class="thumb" type="button" data-fv-item="${esc(p.id)}" data-fv-remote="${p.remote ? 1 : 0}" aria-pressed="${on}" aria-label="${esc(p.name)} 선택">${inner}${state}${chk}</button>`;
   }
 
   function renderFolderView() {
@@ -288,16 +313,20 @@
     fvQueue = [];
     const groups = [];
     items.forEach((p) => {
-      const label = dayLabel(p.createdAt);
+      const label = dayLabel(p.takenAt || p.createdAt);
       let g = groups[groups.length - 1];
       if (!g || g.label !== label) { g = { label, items: [] }; groups.push(g); }
       g.items.push(p);
     });
     $('#fv-groups').innerHTML = groups.map((g) => `
       <section class="fv-group">
-        <h2>${esc(g.label)} · ${g.items.length}개</h2>
+        <div class="fv-group-head">
+          <h2>${esc(g.label)} · ${g.items.length}개</h2>
+          ${sel.on ? `<button class="fv-day-select" type="button" data-select-day="${esc(g.label)}">${g.items.every((p) => sel.ids.has(p.id)) ? '선택 해제' : '이 날짜 선택'}</button>` : ''}
+        </div>
         <div class="fv-grid">${g.items.map(tileHtml).join('')}</div>
       </section>`).join('');
+    renderSelectBar(items);
     $('#fv-empty').hidden = items.length > 0 || fv.loading;
     $('#fv-loading').hidden = !fv.loading;
     $('#fv-more').hidden = !fv.next || fv.loading;
@@ -338,9 +367,364 @@
   }
 
   function openFolderItem(id, remote) {
+    if (sel.on) return toggleSelect(id);
     if (!remote) return openViewer(id);
     const p = folderItems().find((x) => x.id === id);
     if (p) openViewer(null, Object.assign({ folderName: folders().find((f) => f.id === fv.folderId).name, thumb: fvThumbs.get(id) || p.thumbLink }, p));
+  }
+
+  // ---------- 선택 모드 ----------
+  const sel = { on: false, ids: new Set() };
+  let suppressClick = false;
+
+  function startSelect(firstId) {
+    if (!fv.folderId) return;
+    sel.on = true;
+    sel.ids = new Set(firstId ? [firstId] : []);
+    document.body.classList.add('selecting');
+    $('#select-bar').hidden = false;
+    $('#select-actions').hidden = false;
+    if (location.hash !== '#select') history.pushState({ select: true }, '', '#select');
+    renderFolderView();
+  }
+
+  function endSelect(fromPopState) {
+    if (!sel.on) return;
+    sel.on = false;
+    sel.ids.clear();
+    document.body.classList.remove('selecting');
+    $('#select-bar').hidden = true;
+    $('#select-actions').hidden = true;
+    if (!fromPopState && location.hash === '#select') history.back();
+    renderFolderView();
+  }
+
+  function toggleSelect(id) {
+    if (sel.ids.has(id)) sel.ids.delete(id); else sel.ids.add(id);
+    renderFolderView();
+  }
+
+  function renderSelectBar(items) {
+    if (!sel.on) return;
+    const n = sel.ids.size;
+    $('#select-count').textContent = n ? `${n}개 선택` : '사진을 골라 주세요';
+    $('#select-all').textContent = items.length && items.every((p) => sel.ids.has(p.id)) ? '전체 해제' : '전체 선택';
+    $$('#select-actions .sel-btn').forEach((b) => { b.disabled = !n; });
+  }
+
+  function selectedItems() {
+    return folderItems().filter((p) => sel.ids.has(p.id));
+  }
+
+  // 사진을 길게 누르면 선택 모드로 들어간다 (휴대폰 갤러리와 같은 방식)
+  function bindLongPress() {
+    const box = $('#fv-groups');
+    let timer = null, start = null;
+    box.addEventListener('pointerdown', (e) => {
+      const tile = e.target.closest('[data-fv-item]');
+      if (!tile || sel.on) return;
+      start = { x: e.clientX, y: e.clientY };
+      timer = setTimeout(() => {
+        timer = null;
+        suppressClick = true;
+        if (navigator.vibrate) navigator.vibrate(20);
+        startSelect(tile.dataset.fvItem);
+      }, 450);
+    });
+    const cancel = () => { clearTimeout(timer); timer = null; };
+    box.addEventListener('pointermove', (e) => {
+      if (timer && start && Math.hypot(e.clientX - start.x, e.clientY - start.y) > 10) cancel();
+    });
+    box.addEventListener('pointerup', cancel);
+    box.addEventListener('pointercancel', cancel);
+    box.addEventListener('contextmenu', (e) => { if (e.target.closest('[data-fv-item]')) e.preventDefault(); });
+  }
+
+  // ---------- 아래에서 올라오는 메뉴 ----------
+  let sheetHandlers = [];
+  function openSheet(title, sub, items) {
+    $('#sheet-title').textContent = title;
+    $('#sheet-sub').hidden = !sub;
+    $('#sheet-sub').textContent = sub || '';
+    sheetHandlers = items.map((it) => it.onClick);
+    $('#sheet-items').innerHTML = items.map((it, i) =>
+      `<button class="sheet-item ${it.cls || ''}" type="button" data-sheet="${i}"${it.disabled ? ' disabled' : ''}>${it.icon || ''}<span>${esc(it.label)}</span>${it.note ? `<small>${esc(it.note)}</small>` : ''}</button>`
+    ).join('');
+    $('#dlg-sheet').showModal();
+  }
+
+  const ICON = {
+    target: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2453D6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></svg>',
+    edit: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4l10-10-4-4L4 16z"/><path d="M13 7l4 4"/></svg>',
+    trash: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/></svg>',
+    folder: FOLDER_SVG
+  };
+
+  function openFolderMenu(folderId) {
+    const f = folders().find((x) => x.id === folderId);
+    if (!f) return;
+    const cur = currentFolder();
+    const items = [];
+    if (!cur || cur.id !== f.id) items.push({ label: '저장 위치로 지정', icon: ICON.target, onClick: () => { Store.setCurrent(f.id); render(); toast(`‘${f.name}’을 저장 위치로 지정했어요`); } });
+    items.push({ label: '이름 바꾸기', icon: ICON.edit, onClick: () => openRename(f.id) });
+    items.push({ label: '폴더 삭제', icon: ICON.trash, cls: 'danger', onClick: () => deleteFolder(f.id) });
+    openSheet(f.name, null, items);
+  }
+
+  // ---------- 확인 창 ----------
+  let confirmResolve = null;
+  function confirmDialog(title, bodyHtml, yesLabel) {
+    $('#confirm-title').textContent = title;
+    $('#confirm-body').innerHTML = bodyHtml;
+    $('#confirm-yes').textContent = yesLabel || '삭제';
+    $('#dlg-confirm').showModal();
+    return new Promise((resolve) => { confirmResolve = resolve; });
+  }
+  function closeConfirm(answer) {
+    $('#dlg-confirm').close();
+    if (confirmResolve) { confirmResolve(answer); confirmResolve = null; }
+  }
+
+  function needDrive(items) {
+    if (items.some((p) => p.driveFileId) && !Drive.hasToken()) {
+      toast('드라이브 연결이 필요해요. 위의 ‘다시 연결’을 눌러 주세요');
+      return true;
+    }
+    return false;
+  }
+
+  function bumpCount(folderId, delta) {
+    const fs = folders();
+    const f = fs.find((x) => x.id === folderId);
+    if (f) { f.count = Math.max(0, (f.count || 0) + delta); Store.setFolders(fs); }
+  }
+
+  // ---------- 사진 삭제 (드라이브 휴지통 + 되돌리기) ----------
+  async function deleteItems(items) {
+    if (!items.length || needDrive(items)) return false;
+    const pending = items.filter((p) => !p.remote && p.status !== 'done');
+    if (pending.length) {
+      const ok = await confirmDialog(`${items.length}개를 삭제할까요?`,
+        `<p class="note-warn">⚠ 아직 올라가지 않은 ${pending.length}개는 휴대폰에만 있어요. 지우고 5초가 지나면 되살릴 수 없어요.</p>` +
+        (items.length > pending.length ? `<p>나머지 ${items.length - pending.length}개는 드라이브 휴지통으로 이동해요 (30일 보관).</p>` : ''));
+      if (!ok) return false;
+    }
+    toastSticky(`${items.length}개 삭제하는 중…`);
+    const trashed = [], removedRecords = [], removedFiles = [];
+    let failed = 0;
+    for (const p of items) {
+      try {
+        if (p.driveFileId) { await Drive.trash(p.driveFileId); trashed.push(p.driveFileId); }
+        if (!p.remote) {
+          const rec = await Store.photos.get(p.id);
+          if (rec) { removedRecords.push(rec); await Store.photos.remove(p.id); }
+          if (rec && rec.status === 'done') bumpCount(rec.folderId, -1);
+        } else {
+          const i = fv.files.findIndex((f) => f.id === p.id);
+          if (i >= 0) removedFiles.push(fv.files.splice(i, 1)[0]);
+        }
+      } catch (e) {
+        failed++;
+      }
+    }
+    await refresh();
+    const done = items.length - failed;
+    const undo = async () => {
+      toastSticky('되돌리는 중…');
+      for (const id of trashed) await Drive.untrash(id).catch(() => {});
+      for (const rec of removedRecords) {
+        await Store.photos.put(rec.status === 'uploading' ? Object.assign({}, rec, { status: 'waiting' }) : rec);
+        if (rec.status === 'done') bumpCount(rec.folderId, 1);
+      }
+      fv.files = fv.files.concat(removedFiles);
+      await refresh();
+      Uploader.kick();
+      toast('되돌렸어요');
+    };
+    if (done) toast(`${done}개를 ${trashed.length ? '휴지통으로 옮겼어요' : '삭제했어요'}${failed ? ` · ${failed}개 실패` : ''}`, '되돌리기', undo);
+    else toast('삭제하지 못했어요. 잠시 뒤 다시 해 주세요');
+    return true;
+  }
+
+  // ---------- 다른 폴더로 옮기기 ----------
+  function chooseFolderFor(items, done) {
+    const fromId = fv.folderId || (items[0] && items[0].folderId);
+    const list = folders();
+    const options = list.map((f) => ({
+      label: f.name,
+      icon: ICON.folder,
+      cls: 'boxed',
+      disabled: f.id === fromId,
+      note: f.id === fromId ? '지금 폴더' : '',
+      onClick: () => moveItems(items, fromId, f.id).then(done)
+    }));
+    options.push({ label: '+ 새 폴더 만들어 옮기기', cls: 'dashed', onClick: () => { moveAfterCreate = { items, fromId, done }; openFolderDialog(); } });
+    openSheet(`${items.length}개를 어느 폴더로 옮길까요?`, '드라이브에서도 그 폴더로 이동해요', options);
+  }
+  let moveAfterCreate = null;
+
+  async function moveItems(items, fromId, toId) {
+    if (!items.length || fromId === toId || needDrive(items)) return false;
+    const fs = folders();
+    const from = fs.find((f) => f.id === fromId) || { id: fromId, driveId: null };
+    const to = fs.find((f) => f.id === toId);
+    if (!to) return false;
+    toastSticky(`${items.length}개 옮기는 중…`);
+    let moved = 0;
+    try {
+      let toDrive = to.driveId;
+      if (items.some((p) => p.driveFileId)) {
+        toDrive = await Drive.ensureFolder(to);
+        if (to.driveId !== toDrive) { to.driveId = toDrive; Store.setFolders(fs); }
+      }
+      for (const p of items) {
+        if (p.driveFileId) await Drive.move(p.driveFileId, from.driveId, toDrive);
+        if (!p.remote) {
+          const rec = await Store.photos.update(p.id, { folderId: to.id, folderName: to.name });
+          if (rec && rec.status === 'done') { bumpCount(fromId, -1); bumpCount(toId, 1); }
+        } else {
+          const i = fv.files.findIndex((f) => f.id === p.id);
+          if (i >= 0) fv.files.splice(i, 1);
+          bumpCount(toId, 1);
+        }
+        moved++;
+      }
+    } catch (e) {
+      toast(moved ? `${moved}개만 옮겼어요. 나머지는 다시 해 주세요` : '옮기지 못했어요. 잠시 뒤 다시 해 주세요');
+      await refresh();
+      return moved > 0;
+    }
+    await refresh();
+    toast(`‘${to.name}’ 폴더로 ${moved}개를 옮겼어요`);
+    return true;
+  }
+
+  // ---------- 휴대폰에 저장 ----------
+  // 웹앱은 앨범에 직접 넣을 수 없어서, 아이폰은 공유 창의 '이미지 저장', 안드로이드는 다운로드로 저장한다.
+  // 파일을 준비하는 동안 버튼을 누른 효력이 끝나므로, 준비가 끝나면 한 번 더 눌러 저장 창을 연다
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  let saveFiles = [];
+
+  async function saveItems(items) {
+    if (!items.length) return;
+    if (items.some((p) => !p.blob && p.driveFileId) && !Drive.hasToken()) {
+      return toast('드라이브 연결이 필요해요. 위의 ‘다시 연결’을 눌러 주세요');
+    }
+    saveFiles = [];
+    let failed = 0;
+    for (let i = 0; i < items.length; i++) {
+      toastSticky(`휴대폰에 저장할 준비 중 ${i + 1}/${items.length}`);
+      const p = items[i];
+      try {
+        const rec = !p.remote ? await Store.photos.get(p.id) : null;
+        const blob = (rec && rec.blob) || (p.driveFileId ? await Drive.download(p.driveFileId) : null);
+        if (!blob) throw new Error('no data');
+        saveFiles.push(new File([blob], p.name, { type: blob.type || (p.kind === 'video' ? 'video/mp4' : 'image/jpeg') }));
+      } catch (e) {
+        failed++;
+      }
+    }
+    $('#toast').hidden = true;
+    if (!saveFiles.length) return toast('저장할 파일을 불러오지 못했어요');
+    const hasVideo = saveFiles.some((f) => /^video\//.test(f.type));
+    $('#save-title').textContent = `${saveFiles.length}개를 저장할 준비가 됐어요`;
+    $('#save-body').textContent = (isIOS
+      ? `다음 화면에서 ‘${hasVideo ? '이미지/비디오' : '이미지'} 저장’을 누르면 사진 앱에 저장돼요.`
+      : '휴대폰 갤러리의 ‘Download(다운로드)’ 앨범에 저장돼요.') + (failed ? ` (${failed}개는 불러오지 못했어요)` : '');
+    $('#dlg-save').showModal();
+  }
+
+  async function saveGo() {
+    $('#dlg-save').close();
+    const files = saveFiles;
+    saveFiles = [];
+    if (isIOS && navigator.canShare && navigator.canShare({ files })) {
+      try {
+        await navigator.share({ files });
+      } catch (e) {
+        if (e.name !== 'AbortError') toast('저장 창을 열지 못했어요');
+      }
+      return;
+    }
+    files.forEach((f, i) => {
+      const url = URL.createObjectURL(f);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = f.name;
+      document.body.appendChild(a);
+      setTimeout(() => { a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000); }, i * 300);
+    });
+    toast(`${files.length}개를 휴대폰에 저장했어요`);
+  }
+
+  // ---------- 폴더 이름 바꾸기 / 삭제 ----------
+  let renameId = null;
+  function openRename(folderId) {
+    const f = folders().find((x) => x.id === folderId);
+    if (!f) return;
+    renameId = f.id;
+    $('#rename-input').value = f.name;
+    $('#rename-error').hidden = true;
+    $('#dlg-rename').showModal();
+    setTimeout(() => { const i = $('#rename-input'); i.focus(); i.select(); }, 50);
+  }
+
+  async function submitRename() {
+    const fs = folders();
+    const f = fs.find((x) => x.id === renameId);
+    const name = $('#rename-input').value.trim().replace(/[\\/]/g, '·');
+    const err = (m) => { $('#rename-error').textContent = m; $('#rename-error').hidden = false; };
+    if (!f) return $('#dlg-rename').close();
+    if (!name) return err('이름을 입력해 주세요.');
+    if (name === f.name) return $('#dlg-rename').close();
+    if (fs.some((x) => x.id !== f.id && x.name.toLowerCase() === name.toLowerCase())) return err('같은 이름의 폴더가 있어요. 다른 이름을 써 주세요.');
+    if (f.driveId) {
+      if (!Drive.hasToken()) return err('드라이브 연결이 필요해요. ‘다시 연결’ 후 해 주세요.');
+      try { await Drive.rename(f.driveId, name); } catch (e) { return err('드라이브에서 이름을 바꾸지 못했어요. 잠시 뒤 다시 해 주세요.'); }
+    }
+    const old = f.name;
+    f.name = name;
+    Store.setFolders(fs);
+    for (const p of photos.filter((x) => x.folderId === f.id)) await Store.photos.update(p.id, { folderName: name });
+    $('#dlg-rename').close();
+    await refresh();
+    toast(`‘${old}’ → ‘${name}’으로 바꿨어요`);
+  }
+
+  async function deleteFolder(folderId) {
+    const f = folders().find((x) => x.id === folderId);
+    if (!f) return;
+    if (f.driveId && !Drive.hasToken()) return toast('드라이브 연결이 필요해요. 위의 ‘다시 연결’을 눌러 주세요');
+    const local = photos.filter((p) => p.folderId === f.id);
+    const pending = local.filter((p) => p.status !== 'done').length;
+    let total = pending;
+    if (f.driveId) {
+      toastSticky('폴더 안의 사진 개수를 확인하는 중…');
+      try { total += await Drive.countFiles(f.driveId); } catch (e) { total += local.length - pending; }
+      $('#toast').hidden = true;
+    }
+    const ok = await confirmDialog(`‘${f.name}’ 폴더를 삭제할까요?`,
+      `<p>폴더${total ? `와 안의 사진·동영상 <strong>${total}개</strong>가` : '가'} ${f.driveId ? '드라이브 <strong>휴지통</strong>으로 이동해요.' : '삭제돼요.'}</p>` +
+      (f.driveId ? '<p class="note-ok">30일 안에는 드라이브 휴지통에서 되살릴 수 있어요.</p>' : '') +
+      (pending ? `<p class="note-warn">⚠ 아직 올라가지 않은 ${pending}개는 휴대폰에만 있어서 함께 지워지고 되살릴 수 없어요.</p>` : ''));
+    if (!ok) return;
+    try {
+      if (f.driveId) await Drive.trash(f.driveId);
+    } catch (e) {
+      return toast('드라이브에서 폴더를 지우지 못했어요. 잠시 뒤 다시 해 주세요');
+    }
+    for (const p of local) await Store.photos.remove(p.id);
+    const wasCurrent = Store.getCurrent() === f.id;
+    Store.setFolders(folders().filter((x) => x.id !== f.id));
+    if (wasCurrent) Store.setCurrent(null);
+    if (fv.folderId === f.id) { endSelect(); closeFolderView(); }
+    await refresh();
+    if (wasCurrent) {
+      setTab('folders');
+      toast(`‘${f.name}’ 폴더를 삭제했어요. 새 저장 위치를 골라 주세요`);
+    } else {
+      toast(`‘${f.name}’ 폴더를 ${f.driveId ? '휴지통으로 옮겼어요' : '삭제했어요'}`);
+    }
   }
 
   // ---------- 그리기 ----------
@@ -426,10 +810,13 @@
     const list = folders().filter((f) => !term || f.name.includes(term));
     $('#folder-list').innerHTML = list.length ? list.map((f) => {
       const on = cur && cur.id === f.id;
-      return `<li><button class="folder-row" type="button" data-folder="${esc(f.id)}" aria-pressed="${!!on}">
+      // 줄을 누르면 폴더 사진 보기, ⋯ 는 저장 위치 지정·이름 바꾸기·삭제 메뉴
+      return `<li class="folder-row-wrap" aria-current="${!!on}"><button class="folder-row" type="button" data-open-folder="${esc(f.id)}" aria-pressed="${!!on}">
         <span class="folder-icon">${FOLDER_SVG}</span>
-        <span class="grow min0"><strong>${esc(f.name)}</strong><span class="small muted">${f.count || 0}장 · ${relTime(f.lastAt)}${f.driveId ? '' : ' · <span class="chip-sync">드라이브에 아직 없음</span>'}</span></span>
+        <span class="grow min0"><strong>${esc(f.name)}</strong><span class="small muted">${f.count || 0}개 · ${relTime(f.lastAt)}${f.driveId ? '' : ' · <span class="chip-sync">드라이브에 아직 없음</span>'}</span></span>
         ${on ? '<span class="chip-selected">저장 위치</span>' : ''}
+      </button><button class="row-more" type="button" data-folder-menu="${esc(f.id)}" aria-label="${esc(f.name)} 메뉴">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="19" cy="12" r="1.9"/></svg>
       </button></li>`;
     }).join('') : `<li class="empty">${term ? '찾는 폴더가 없어요' : '새 폴더를 만들어 시작하세요'}</li>`;
   }
@@ -774,6 +1161,50 @@
     }
   }
 
+  // ---------- 앨범에서 올리기 ----------
+  // 고른 사진·동영상을 찍은 시각으로 이름 붙여 대기열에 넣는다. 이미 가져온 파일은 건너뛴다
+  let importing = false;
+  async function importFromGallery(files) {
+    if (importing) return toast('앨범에서 가져오는 중이에요. 끝난 뒤 다시 골라 주세요');
+    const folder = currentFolder();
+    if (!folder) return;
+    importing = true;
+    const known = new Set(photos.map((p) => p.sourceKey).filter(Boolean));
+    let added = 0, skipped = 0, failed = 0;
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i];
+        toastSticky(`앨범에서 가져오는 중 ${i + 1}/${files.length}`);
+        const key = `${f.name}|${f.size}|${f.lastModified}`;
+        if (known.has(key)) { skipped++; continue; }
+        if (!/^(image|video)\//.test(f.type)) { failed++; continue; }
+        try {
+          const takenAt = await MediaDate.takenAt(f);
+          const opts = { source: 'gallery', sourceKey: key, takenAt };
+          if (/^video\//.test(f.type)) Object.assign(opts, await videoInfo(f));
+          await Uploader.add(f, folder, opts);
+          known.add(key);
+          added++;
+        } catch (e) {
+          failed++;
+        }
+      }
+    } finally {
+      importing = false;
+    }
+    await refresh();
+    let msg = added ? `‘${folder.name}’ 폴더에 ${added}개를 추가했어요` : '새로 추가한 파일이 없어요';
+    if (skipped) msg += ` · 이미 가져온 ${skipped}개는 건너뜀`;
+    if (failed) msg += ` · ${failed}개는 가져오지 못함`;
+    toast(msg);
+    if (added) setTab('upload');
+  }
+
+  // 진행 상황처럼 계속 바뀌는 안내는 사라지지 않게 띄워 두고, 다음 toast가 덮어쓴다
+  function toastSticky(msg) {
+    toast(msg, null, null, 0);
+  }
+
   // ---------- 다이얼로그 ----------
   function openFolderDialog() {
     const dlg = $('#dlg-folder');
@@ -785,6 +1216,7 @@
 
   // ---------- 크게 보기 (두 손가락 확대, 두 번 눌러 확대, 끌어서 이동) ----------
   const view = { s: 1, x: 0, y: 0 };
+  let viewerItem = null; // 지금 크게 보고 있는 사진 (옮기기·저장·삭제 대상)
   let viewerUrl = null;
   let viewerToken = 0;
 
@@ -910,6 +1342,7 @@
   async function openViewer(id, record) {
     const p = record || await Store.photos.get(id);
     if (!p) return;
+    viewerItem = p;
     const token = ++viewerToken;
     clearViewerMedia();
     resetView();
@@ -975,7 +1408,30 @@
       if (t.dataset.go) return setTab(t.dataset.go);
       if (t.dataset.folder) return pickFolder(t.dataset.folder);
       if (t.dataset.openFolder) return openFolderView(t.dataset.openFolder);
-      if (t.dataset.fvItem) return openFolderItem(t.dataset.fvItem, t.dataset.fvRemote === '1');
+      if (t.dataset.folderMenu) return openFolderMenu(t.dataset.folderMenu);
+      if (t.dataset.fvItem) {
+        if (suppressClick) { suppressClick = false; return; } // 길게 누른 직후의 클릭은 무시
+        return openFolderItem(t.dataset.fvItem, t.dataset.fvRemote === '1');
+      }
+      if (t.dataset.selectDay) {
+        const day = folderItems().filter((p) => dayLabel(p.takenAt || p.createdAt) === t.dataset.selectDay);
+        const all = day.every((p) => sel.ids.has(p.id));
+        day.forEach((p) => (all ? sel.ids.delete(p.id) : sel.ids.add(p.id)));
+        return renderFolderView();
+      }
+      if (t.dataset.sheet) {
+        const fn = sheetHandlers[Number(t.dataset.sheet)];
+        $('#dlg-sheet').close();
+        if (fn) fn();
+        return;
+      }
+      if (t.id === 'toast-action') {
+        const fn = toastFn;
+        $('#toast').hidden = true;
+        toastFn = null;
+        if (fn) fn();
+        return;
+      }
       if (t.dataset.chip) { Store.setCurrent(t.dataset.chip); render(); return; }
       if (t.dataset.retry) return Uploader.retry(t.dataset.retry);
       if (t.dataset.photo) return openViewer(t.dataset.photo);
@@ -999,7 +1455,43 @@
           render();
           return openCamera();
         case 'native-camera': return $(camMode === 'video' ? '#native-video' : '#native-input').click();
+        case 'pick-gallery':
+          if (!currentFolder()) {
+            toast('먼저 사진을 올릴 폴더를 만들어 주세요');
+            return openFolderDialog();
+          }
+          return $('#gallery-input').click();
+        // 선택 모드
+        case 'select-start': return startSelect();
+        case 'select-end': return endSelect();
+        case 'select-all': {
+          const items = folderItems();
+          const all = items.length && items.every((p) => sel.ids.has(p.id));
+          sel.ids = new Set(all ? [] : items.map((p) => p.id));
+          return renderFolderView();
+        }
+        case 'sel-move': return chooseFolderFor(selectedItems(), (ok) => { if (ok) endSelect(); });
+        case 'sel-save': return saveItems(selectedItems()).then(() => endSelect());
+        case 'sel-delete': return deleteItems(selectedItems()).then((ok) => { if (ok) endSelect(); });
+        case 'fv-menu': return openFolderMenu(fv.folderId);
+        case 'confirm-yes': return closeConfirm(true);
+        case 'confirm-no': return closeConfirm(false);
+        case 'save-go': return saveGo();
+        // 크게 보기 아래 버튼
+        case 'viewer-move': return viewerItem && chooseFolderFor([viewerItem], (ok) => { if (ok) $('#dlg-photo').close(); });
+        case 'viewer-save': return viewerItem && saveItems([viewerItem]);
+        case 'viewer-delete': return viewerItem && deleteItems([viewerItem]).then((ok) => { if (ok) $('#dlg-photo').close(); });
       }
+    });
+    $('#dlg-confirm').addEventListener('close', () => { if (confirmResolve) { confirmResolve(false); confirmResolve = null; } });
+    $('#dlg-folder').addEventListener('close', () => { setTimeout(() => { moveAfterCreate = null; }, 0); });
+    $('#form-rename').addEventListener('submit', (e) => { e.preventDefault(); submitRename(); });
+    $('#rename-input').addEventListener('input', () => { $('#rename-error').hidden = true; });
+    bindLongPress();
+    $('#gallery-input').addEventListener('change', (e) => {
+      const files = Array.from(e.target.files || []);
+      e.target.value = '';
+      if (files.length) importFromGallery(files);
     });
 
     $('#btn-connect').addEventListener('click', (e) => connect(e.currentTarget));
@@ -1062,7 +1554,8 @@
 
     window.addEventListener('popstate', () => {
       if (!$('#camera').hidden && location.hash !== '#camera') closeCamera(true);
-      else if (fv.folderId && location.hash !== '#folder') closeFolderView(true);
+      else if (sel.on && location.hash !== '#select') endSelect(true);
+      else if (fv.folderId && location.hash !== '#folder' && location.hash !== '#select') closeFolderView(true);
     });
     window.addEventListener('online', render);
     window.addEventListener('offline', render);

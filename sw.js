@@ -1,5 +1,5 @@
 // 앱 화면 파일을 저장해 두어 인터넷이 없어도 앱이 열리게 한다 (사진 업로드는 앱 안 대기열이 담당)
-const VERSION = 'photo-app-v5';
+const VERSION = 'photo-app-v7';
 const SHELL = [
   './',
   'index.html',
@@ -9,6 +9,7 @@ const SHELL = [
   'js/store.js',
   'js/drive.js',
   'js/uploader.js',
+  'js/media-date.js',
   'js/camera.js',
   'js/app.js',
   'icons/icon.svg',
