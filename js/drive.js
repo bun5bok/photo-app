@@ -92,11 +92,55 @@
     clearToken();
   }
 
+  // ---------- 멈춘 요청 끊기 ----------
+  // 아이폰은 앱이 잠깐 얼었다 풀리면 끊긴 연결이 끝나지 않고 계속 걸려 있을 때가 있다.
+  // 모든 요청에 시간 제한을 두고, 필요하면 한꺼번에 끊을 수 있게 기억해 둔다
+  const active = new Set();
+
+  function networkError(message, timeout) {
+    const err = new Error(message || '네트워크 오류');
+    err.network = true;
+    err.timeout = !!timeout;
+    return err;
+  }
+
+  // 정해진 시간 안에 응답이 없으면 끊는 fetch
+  async function timedFetch(url, opts, ms) {
+    const ctrl = new AbortController();
+    const entry = { abort: () => ctrl.abort() };
+    active.add(entry);
+    const timer = setTimeout(() => ctrl.abort(), ms || 30000);
+    try {
+      return await fetch(url, Object.assign({}, opts, { signal: ctrl.signal }));
+    } catch (e) {
+      throw networkError(e.name === 'AbortError' ? '응답이 없어 다시 시도해요' : '네트워크 오류', e.name === 'AbortError');
+    } finally {
+      clearTimeout(timer);
+      active.delete(entry);
+    }
+  }
+
+  // 진행 중인 요청을 모두 끊는다 (업로드가 멈췄을 때 새로 시작하기 전에)
+  function abortAll() {
+    active.forEach((e) => { try { e.abort(); } catch (err) { /* 무시 */ } });
+    active.clear();
+  }
+
+  // 휴대폰이 알려 주는 '연결됨'만 믿지 않고 실제로 구글에 닿는지 확인한다
+  async function reachable() {
+    try {
+      await timedFetch('https://www.googleapis.com/generate_204', { mode: 'no-cors', cache: 'no-store' }, 6000);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
   async function api(path, opts) {
     if (!hasToken()) throw new AuthError('token');
-    const res = await fetch(path.startsWith('http') ? path : API + path, Object.assign({}, opts, {
+    const res = await timedFetch(path.startsWith('http') ? path : API + path, Object.assign({}, opts, {
       headers: Object.assign({ Authorization: 'Bearer ' + token.value }, (opts && opts.headers) || {})
-    }));
+    }), 30000);
     if (res.status === 401) {
       clearToken();
       throw new AuthError('token');
@@ -231,20 +275,34 @@
     return err;
   }
 
+  // 올리는 동안 STALL_MS 동안 한 바이트도 안 나가면(또는 응답이 안 오면) 멈춘 것으로 보고 끊는다
+  const STALL_MS = 45000;
+
   function xhrRequest(method, url, headers, body, onProgress) {
     if (!hasToken()) return Promise.reject(new AuthError('token'));
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
+      let last = Date.now();
+      let stalled = false;
+      const entry = { abort: () => xhr.abort() };
+      active.add(entry);
+      const watch = setInterval(() => {
+        if (Date.now() - last > STALL_MS) { stalled = true; xhr.abort(); }
+      }, 5000);
+      const finish = () => { clearInterval(watch); active.delete(entry); };
       xhr.open(method, url);
       xhr.setRequestHeader('Authorization', 'Bearer ' + token.value);
       Object.keys(headers).forEach((k) => xhr.setRequestHeader(k, headers[k]));
-      if (onProgress) xhr.upload.onprogress = (e) => onProgress(e.loaded);
+      xhr.upload.onprogress = (e) => { last = Date.now(); if (onProgress) onProgress(e.loaded); };
+      xhr.onprogress = () => { last = Date.now(); };
       xhr.onload = () => {
+        finish();
         if (xhr.status === 401) { clearToken(); return reject(new AuthError('token')); }
         const override = xhr.getResponseHeader('X-HTTP-Status-Code-Override');
         resolve({ status: override ? Number(override) : xhr.status, text: xhr.responseText, xhr });
       };
-      xhr.onerror = () => { const err = new Error('네트워크 오류'); err.network = true; reject(err); };
+      xhr.onerror = () => { finish(); reject(networkError()); };
+      xhr.onabort = () => { finish(); reject(networkError(stalled ? '업로드가 멈춰 다시 시도해요' : '업로드를 다시 시작해요', true)); };
       xhr.send(body);
     });
   }
@@ -335,7 +393,7 @@
   // 휴대폰에서 원본이 지워진 사진을 크게 볼 때 드라이브에서 받아온다
   async function download(fileId) {
     if (!hasToken()) throw new AuthError('token');
-    const res = await fetch(API + '/files/' + fileId + '?alt=media', { headers: { Authorization: 'Bearer ' + token.value } });
+    const res = await timedFetch(API + '/files/' + fileId + '?alt=media', { headers: { Authorization: 'Bearer ' + token.value } }, 600000); // 큰 동영상도 받을 수 있게 10분
     if (res.status === 401) { clearToken(); throw new AuthError('token'); }
     if (!res.ok) throw new Error('드라이브에서 불러오지 못했어요');
     return res.blob();
@@ -344,6 +402,6 @@
   window.Drive = {
     AuthError, isConfigured, rootName, allowedDomain, isAllowedAccount, hasToken, connect, disconnect,
     userInfo, ensureRoot, ensureFolder, listFolders, listFiles, countFiles, upload, download, forgetVerified,
-    trash, untrash, rename, move
+    trash, untrash, rename, move, abortAll, reachable
   };
 })();

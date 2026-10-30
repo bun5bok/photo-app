@@ -197,7 +197,11 @@
         <div class="stat"><span class="muted small">오늘 완료</span><strong id="stat-done" class="c-ok">0</strong></div>
         <div class="stat"><span class="muted small">실패</span><strong id="stat-failed" class="c-err">0</strong></div>
       </div>
-      <p id="upload-hold" class="hold" hidden></p>
+      <div id="upload-hold" class="hold hold-row" hidden>
+        <span id="upload-hold-text" class="grow"></span>
+        <button id="btn-retry-now" class="btn btn-small btn-hold" type="button" data-action="retry-now" hidden>지금 올리기</button>
+      </div>
+      <p id="upload-tip" class="muted small" hidden>앱을 열어 두면 더 빨리 올라가요. 화면이 꺼지거나 다른 앱으로 가면 잠시 멈췄다가, 돌아오면 이어서 올려요.</p>
       <ul id="upload-list" class="upload-list"></ul>
       <p id="upload-empty" class="empty">아직 찍은 사진이 없어요</p>
     </section>
@@ -233,6 +237,10 @@
         <label class="setting-row toggle-row">
           <span class="stack-2 grow"><span>업로드 완료 알림</span><small class="muted">실패했을 때는 항상 알려요</small></span>
           <input id="opt-notify" type="checkbox">
+        </label>
+        <label class="setting-row toggle-row">
+          <span class="stack-2 grow"><span>올리는 동안 화면 켜 두기</span><small class="muted">화면이 꺼지면 업로드가 멈춰서, 올릴 게 남아 있는 동안 켜 둬요</small></span>
+          <input id="opt-awake" type="checkbox">
         </label>
       </div>
       <p class="muted small center">사진촬영 v1.0</p>

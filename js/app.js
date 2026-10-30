@@ -759,6 +759,48 @@
     }[reason] || '';
   }
 
+  // 지금 업로드가 어떤 상태인지 한 문장으로 (남은 시간 포함)
+  function uploadStatus(activeCount) {
+    if (!activeCount) return null;
+    const st = Uploader.state();
+    if (st.hold === 'offline') {
+      const left = st.nextRetryAt ? Math.max(0, Math.ceil((st.nextRetryAt - Date.now()) / 1000)) : 0;
+      return { text: left ? `연결이 끊겨 ${left}초 뒤 다시 올려요` : '연결을 확인하고 있어요', short: left ? `${left}초 뒤 다시` : '연결 확인 중', retry: true, warn: true };
+    }
+    if (st.hold === 'cellular') return { text: holdText('cellular'), short: 'Wi-Fi 기다리는 중', retry: true, warn: true };
+    if (st.hold === 'auth') return { text: holdText('auth'), short: '연결 필요', retry: false, warn: true };
+    if (st.running && st.stalledFor > 20000) return { text: '업로드가 느려요. 멈춘 것 같으면 다시 시작해 주세요', short: '느림', retry: true, warn: true };
+    if (st.running) return { text: '올리는 중이에요', short: '업로드 중', retry: false, warn: false };
+    return { text: '곧 올라가요', short: '곧 업로드', retry: true, warn: false };
+  }
+
+  // 남은 시간 표시를 1초마다 갱신
+  setInterval(() => {
+    if (document.hidden) return;
+    const n = photos.filter((p) => p.status === 'waiting' || p.status === 'uploading').length;
+    const s = uploadStatus(n);
+    if (!s) return;
+    if (!$('#upload-hold').hidden) $('#upload-hold-text').textContent = s.text;
+    const sub = $('#home-progress-sub');
+    if (sub && s.warn) sub.textContent = s.short;
+  }, 1000);
+
+  // ---------- 올리는 동안 화면 켜 두기 ----------
+  let uploadWakeLock = null;
+  async function updateUploadWakeLock() {
+    const want = Store.getSettings().keepAwake && !document.hidden &&
+      photos.some((p) => p.status === 'waiting' || p.status === 'uploading') && Uploader.hold() !== 'auth';
+    if (want && !uploadWakeLock && navigator.wakeLock) {
+      try {
+        uploadWakeLock = await navigator.wakeLock.request('screen');
+        uploadWakeLock.addEventListener('release', () => { uploadWakeLock = null; });
+      } catch (e) { /* 배터리 절약 모드 등에서는 거절될 수 있다 */ }
+    } else if (!want && uploadWakeLock) {
+      uploadWakeLock.release().catch(() => {});
+      uploadWakeLock = null;
+    }
+  }
+
   // 동영상 썸네일에는 재생 표시와 길이를 붙인다
   function thumbInner(p) {
     const img = p.thumb ? `<img src="${p.thumb}" alt="">` : '';
@@ -778,8 +820,9 @@
 
     const { active, doneToday } = stats();
     const hold = Uploader.hold();
-    $('#home-progress-title').textContent = active.length ? `${active.length}장 ${hold ? '대기 중' : '업로드 중'}` : '대기 중인 사진 없음';
-    $('#home-progress-sub').textContent = `오늘 ${doneToday.length}장 완료`;
+    const status = uploadStatus(active.length);
+    $('#home-progress-title').textContent = active.length ? `${active.length}개 ${hold ? '대기 중' : '업로드 중'}` : '대기 중인 사진 없음';
+    $('#home-progress-sub').textContent = status && status.warn ? status.short : `오늘 ${doneToday.length}개 완료`;
     $('#home-progress-bar').style.width = (active.length ? Math.max(overallProgress(active), 4) : (doneToday.length ? 100 : 0)) + '%';
 
     const pill = $('#conn-pill');
@@ -833,9 +876,15 @@
     badge.textContent = active.length;
 
     const reason = active.length ? Uploader.hold() : null;
-    $('#upload-hold').hidden = !reason;
-    $('#upload-hold').textContent = holdText(reason);
+    const status = uploadStatus(active.length);
+    $('#upload-hold').hidden = !status;
+    $('#upload-hold').classList.toggle('ok', !!status && !status.warn);
+    $('#upload-hold-text').textContent = status ? status.text : '';
+    $('#btn-retry-now').hidden = !(status && status.retry);
+    $('#upload-tip').hidden = !active.length;
     $('#reconnect-banner').hidden = !(reason === 'auth' || (!Drive.hasToken() && active.length));
+    // 연결 문제로 기다리는 중이면 사진마다 [다시 시도]를 보여 준다
+    const canNudge = !!status && status.retry;
 
     $('#upload-empty').hidden = photos.length > 0;
     $('#upload-list').innerHTML = photos.slice(0, 100).map((p) => {
@@ -846,7 +895,9 @@
         right = `<span class="status-pct" data-pct="${esc(p.id)}">${pct}%</span>`;
         bar = `<span class="bar"><span class="bar-fill" data-bar="${esc(p.id)}" style="width:${pct}%"></span></span>`;
       } else if (p.status === 'waiting') {
-        right = '<span class="status-text">대기</span>';
+        right = canNudge
+          ? `<button class="btn-wait" type="button" data-retry="${esc(p.id)}">대기 · 다시 시도</button>`
+          : '<span class="status-text">대기</span>';
       } else if (p.status === 'failed') {
         right = `<button class="btn-retry" type="button" data-retry="${esc(p.id)}">다시 시도</button>`;
       } else {
@@ -877,6 +928,7 @@
     $('#opt-data').checked = s.useData;
     $('#opt-original').checked = s.original;
     $('#opt-notify').checked = s.notify;
+    $('#opt-awake').checked = s.keepAwake;
   }
 
   function renderChips() {
@@ -905,6 +957,7 @@
   async function refresh() {
     photos = await Store.photos.all();
     render();
+    updateUploadWakeLock();
   }
 
   // ---------- 카메라 ----------
@@ -1474,6 +1527,9 @@
         case 'sel-save': return saveItems(selectedItems()).then(() => endSelect());
         case 'sel-delete': return deleteItems(selectedItems()).then((ok) => { if (ok) endSelect(); });
         case 'fv-menu': return openFolderMenu(fv.folderId);
+        case 'retry-now':
+          Uploader.retryNow();
+          return toast('지금 다시 올려요');
         case 'confirm-yes': return closeConfirm(true);
         case 'confirm-no': return closeConfirm(false);
         case 'save-go': return saveGo();
@@ -1547,6 +1603,11 @@
     $('#opt-original').addEventListener('change', (e) => {
       Store.setSettings(Object.assign(Store.getSettings(), { original: e.target.checked }));
     });
+    $('#opt-awake').addEventListener('change', (e) => {
+      Store.setSettings(Object.assign(Store.getSettings(), { keepAwake: e.target.checked }));
+      updateUploadWakeLock();
+    });
+    document.addEventListener('visibilitychange', updateUploadWakeLock);
     $('#opt-notify').addEventListener('change', (e) => {
       Store.setSettings(Object.assign(Store.getSettings(), { notify: e.target.checked }));
       if (e.target.checked && 'Notification' in window && Notification.permission === 'default') Notification.requestPermission();
@@ -1563,6 +1624,7 @@
     let doneBatch = 0;
     Uploader.on((type, detail) => {
       if (type === 'progress') return paintProgress(detail.id, detail.ratio);
+      if (type === 'stalled') toast('업로드가 멈춰서 다시 시작했어요');
       if (type === 'failed') {
         toast('업로드 실패: ' + detail.message);
         notify('업로드 실패', detail.message);

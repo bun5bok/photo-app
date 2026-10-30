@@ -370,3 +370,10 @@ body.selecting .content { padding-bottom: calc(110px + var(--safe-b)); }
 .folder-row-wrap .folder-row { padding-right: 52px; }
 .folder-row-wrap[aria-current="true"] .folder-row { padding-right: 51px; }
 .row-more { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); width: 44px; height: 44px; border: none; border-radius: 22px; background: transparent; color: var(--muted); display: flex; align-items: center; justify-content: center; }
+
+/* 업로드 대기 상태 + 지금 올리기 */
+.hold-row { display: flex; align-items: center; gap: 10px; }
+.btn-hold { flex: none; background: #8A4200; color: #fff; }
+.hold-row.ok { background: var(--accent-soft); color: var(--accent); }
+.hold-row.ok .btn-hold { background: var(--accent); }
+.btn-wait { height: 32px; padding: 0 10px; border: 1px solid #D5D8D1; border-radius: 16px; background: var(--surface); color: var(--muted); font-size: 12px; font-weight: 700; flex: none; }
