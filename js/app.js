@@ -164,9 +164,183 @@
   // ---------- 탭 ----------
   function setTab(next) {
     tab = next;
+    if (fv.folderId) closeFolderView(false, true);
     $$('.tab').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.tab === tab)));
     ['home', 'folders', 'upload', 'settings'].forEach((t) => { $('#tab-' + t).hidden = t !== tab; });
     window.scrollTo(0, 0);
+  }
+
+  // ---------- 폴더 상세 (폴더 안 사진 보기) ----------
+  const fv = { folderId: null, files: [], next: null, loading: false, error: null };
+  const fvThumbs = new Map(); // 드라이브 파일 id -> 미리보기 (이번 실행 동안만)
+  let fvQueue = [];
+  let fvWorking = 0;
+
+  function openFolderView(id) {
+    const folder = folders().find((f) => f.id === id);
+    if (!folder) return;
+    Object.assign(fv, { folderId: id, files: [], next: null, loading: false, error: null });
+    ['home', 'folders', 'upload', 'settings'].forEach((t) => { $('#tab-' + t).hidden = true; });
+    $('#folder-view').hidden = false;
+    window.scrollTo(0, 0);
+    if (location.hash !== '#folder') history.pushState({ folder: true }, '', '#folder');
+    renderFolderView();
+    loadFolderFiles();
+  }
+
+  function closeFolderView(fromPopState, keepTab) {
+    fv.folderId = null;
+    fvQueue = [];
+    $('#folder-view').hidden = true;
+    if (!keepTab) ['home', 'folders', 'upload', 'settings'].forEach((t) => { $('#tab-' + t).hidden = t !== tab; });
+    if (!fromPopState && location.hash === '#folder') history.back();
+  }
+
+  async function loadFolderFiles(more) {
+    const folder = folders().find((f) => f.id === fv.folderId);
+    if (!folder || !folder.driveId || !Drive.hasToken() || fv.loading) return renderFolderView();
+    const id = fv.folderId;
+    fv.loading = true;
+    renderFolderView();
+    try {
+      const r = await Drive.listFiles(folder.driveId, more ? fv.next : null);
+      if (fv.folderId !== id) return;
+      fv.files = more ? fv.files.concat(r.files || []) : (r.files || []);
+      fv.next = r.nextPageToken || null;
+      fv.error = null;
+    } catch (e) {
+      if (fv.folderId !== id) return;
+      fv.error = e instanceof Drive.AuthError ? 'auth' : '드라이브에서 불러오지 못했어요. 잠시 뒤 다시 열어 주세요.';
+    } finally {
+      if (fv.folderId === id) { fv.loading = false; renderFolderView(); }
+    }
+  }
+
+  function dayLabel(ts) {
+    const d = new Date(ts), now = new Date();
+    if (d.toDateString() === now.toDateString()) return '오늘';
+    const y = new Date(now); y.setDate(now.getDate() - 1);
+    if (d.toDateString() === y.toDateString()) return '어제';
+    return (d.getFullYear() !== now.getFullYear() ? d.getFullYear() + '년 ' : '') + (d.getMonth() + 1) + '월 ' + d.getDate() + '일';
+  }
+
+  // 이 휴대폰의 기록과 드라이브 목록을 합친다 (같은 파일은 휴대폰 미리보기를 쓴다)
+  function folderItems() {
+    const local = photos.filter((p) => p.folderId === fv.folderId);
+    const known = new Set(local.map((p) => p.driveFileId).filter(Boolean));
+    const remote = fv.files.filter((f) => !known.has(f.id)).map((f) => ({
+      remote: true,
+      id: f.id,
+      driveFileId: f.id,
+      kind: /^video\//.test(f.mimeType) ? 'video' : 'photo',
+      name: f.name,
+      webViewLink: f.webViewLink,
+      thumbLink: f.thumbnailLink ? f.thumbnailLink.replace(/=s\d+$/, '=s400') : '',
+      duration: f.videoMediaMetadata && f.videoMediaMetadata.durationMillis ? Math.round(f.videoMediaMetadata.durationMillis / 1000) : null,
+      createdAt: Date.parse(f.createdTime) || 0,
+      status: 'done'
+    }));
+    return local.concat(remote).sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  const PH_SVG = '<span class="ph"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M21 16l-5-5-8 8"/></svg></span>';
+
+  function tileHtml(p) {
+    let inner;
+    if (!p.remote) {
+      inner = thumbInner(p);
+    } else {
+      const cached = fvThumbs.get(p.id);
+      const src = cached || p.thumbLink;
+      inner = PH_SVG + (src ? `<img src="${esc(src)}" alt="" referrerpolicy="no-referrer" data-remote="${esc(p.id)}" data-kind="${p.kind}"${cached ? ' data-cached="1"' : ''}>` : '');
+      if (p.kind === 'video') inner += `<span class="vid"><svg width="8" height="8" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 1l7 4-7 4z" fill="#fff"/></svg>${p.duration ? fmtTime(p.duration) : ''}</span>`;
+      if (!src && p.kind === 'photo') fvQueue.push(p.id);
+    }
+    let state = '';
+    if (p.status === 'uploading') state = `<span class="state"><span class="up">${Math.round((Uploader.progressOf(p.id) || 0) * 100)}%</span></span>`;
+    else if (p.status === 'waiting') state = '<span class="state"><span>대기</span></span>';
+    else if (p.status === 'failed') state = '<span class="state"><span class="fail">실패</span></span>';
+    return `<button class="thumb" type="button" data-fv-item="${esc(p.id)}" data-fv-remote="${p.remote ? 1 : 0}" aria-label="${esc(p.name)} 보기">${inner}${state}</button>`;
+  }
+
+  function renderFolderView() {
+    if (!fv.folderId) return;
+    const folder = folders().find((f) => f.id === fv.folderId);
+    if (!folder) return closeFolderView();
+    const root = Store.getRoot();
+    const cur = currentFolder();
+    const items = folderItems();
+    $('#fv-title').textContent = folder.name;
+    $('#fv-path').textContent = `내 드라이브 › ${root ? root.name : Drive.rootName()} › ${folder.name}${items.length ? ` · ${items.length}${fv.next ? '+' : ''}개` : ''}`;
+    $('#fv-drive').hidden = !folder.driveId;
+    if (folder.driveId) $('#fv-drive').href = `https://drive.google.com/drive/folders/${folder.driveId}`;
+    const isCurrent = !!cur && cur.id === folder.id;
+    $('#fv-set').hidden = isCurrent;
+    $('#fv-current').hidden = !isCurrent;
+
+    let notice = '';
+    if (fv.error === 'auth' || (folder.driveId && !Drive.hasToken())) notice = '드라이브 연결이 만료돼 이 휴대폰에서 찍은 것만 보여요. 위의 ‘다시 연결’을 누르면 전체가 보여요.';
+    else if (fv.error) notice = fv.error;
+    $('#fv-notice').hidden = !notice;
+    $('#fv-notice').textContent = notice;
+
+    // 날짜별로 묶어서 보여 준다
+    fvQueue = [];
+    const groups = [];
+    items.forEach((p) => {
+      const label = dayLabel(p.createdAt);
+      let g = groups[groups.length - 1];
+      if (!g || g.label !== label) { g = { label, items: [] }; groups.push(g); }
+      g.items.push(p);
+    });
+    $('#fv-groups').innerHTML = groups.map((g) => `
+      <section class="fv-group">
+        <h2>${esc(g.label)} · ${g.items.length}개</h2>
+        <div class="fv-grid">${g.items.map(tileHtml).join('')}</div>
+      </section>`).join('');
+    $('#fv-empty').hidden = items.length > 0 || fv.loading;
+    $('#fv-loading').hidden = !fv.loading;
+    $('#fv-more').hidden = !fv.next || fv.loading;
+
+    // 드라이브 미리보기 주소가 열리지 않으면 원본을 받아 작은 미리보기를 만든다
+    $$('#fv-groups img[data-remote]:not([data-cached])').forEach((img) => {
+      img.addEventListener('error', () => {
+        img.remove();
+        if (img.dataset.kind === 'photo') { fvQueue.push(img.dataset.remote); pumpThumbs(); }
+      }, { once: true });
+    });
+    pumpThumbs();
+  }
+
+  async function makeThumbFromBlob(blob) {
+    const bmp = await createImageBitmap(blob, { imageOrientation: 'from-image' }).catch(() => createImageBitmap(blob));
+    const scale = 400 / Math.max(bmp.width, bmp.height);
+    const c = document.createElement('canvas');
+    c.width = Math.round(bmp.width * Math.min(1, scale));
+    c.height = Math.round(bmp.height * Math.min(1, scale));
+    c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+    if (bmp.close) bmp.close();
+    return c.toDataURL('image/jpeg', 0.75);
+  }
+
+  function pumpThumbs() {
+    while (fvWorking < 2 && fvQueue.length && Drive.hasToken()) {
+      const id = fvQueue.shift();
+      if (fvThumbs.has(id)) continue;
+      fvWorking++;
+      fvThumbs.set(id, '');
+      Drive.download(id).then(makeThumbFromBlob).then((url) => {
+        fvThumbs.set(id, url);
+        const btn = document.querySelector(`[data-fv-item="${id}"]`);
+        if (btn && !btn.querySelector('img')) btn.insertAdjacentHTML('beforeend', `<img src="${url}" alt="">`);
+      }).catch(() => { fvThumbs.delete(id); }).finally(() => { fvWorking--; pumpThumbs(); });
+    }
+  }
+
+  function openFolderItem(id, remote) {
+    if (!remote) return openViewer(id);
+    const p = folderItems().find((x) => x.id === id);
+    if (p) openViewer(null, Object.assign({ folderName: folders().find((f) => f.id === fv.folderId).name, thumb: fvThumbs.get(id) || p.thumbLink }, p));
   }
 
   // ---------- 그리기 ----------
@@ -176,6 +350,7 @@
     renderUploads();
     renderSettings();
     renderChips();
+    renderFolderView();
   }
 
   function stats() {
@@ -237,7 +412,7 @@
     const others = folders().filter((f) => !cur || f.id !== cur.id).sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
     const list = (cur ? [cur] : []).concat(others).slice(0, 3);
     $('#home-folders').innerHTML = list.map((f) => `
-      <button class="folder-card" type="button" data-folder="${esc(f.id)}" aria-pressed="${cur && cur.id === f.id}">
+      <button class="folder-card" type="button" data-open-folder="${esc(f.id)}" aria-pressed="${cur && cur.id === f.id}">
         ${FOLDER_SVG}<strong>${esc(f.name)}</strong><span class="small muted">${f.count || 0}장</span>
       </button>`).join('') + `
       <button class="folder-card add" type="button" data-action="new-folder">
@@ -731,8 +906,9 @@
     vid.load();
   }
 
-  async function openViewer(id) {
-    const p = await Store.photos.get(id);
+  // id: 이 휴대폰의 기록 id, record: 드라이브에만 있는 파일을 볼 때 직접 넘기는 정보
+  async function openViewer(id, record) {
+    const p = record || await Store.photos.get(id);
     if (!p) return;
     const token = ++viewerToken;
     clearViewerMedia();
@@ -798,6 +974,8 @@
       if (t.dataset.tab) return setTab(t.dataset.tab);
       if (t.dataset.go) return setTab(t.dataset.go);
       if (t.dataset.folder) return pickFolder(t.dataset.folder);
+      if (t.dataset.openFolder) return openFolderView(t.dataset.openFolder);
+      if (t.dataset.fvItem) return openFolderItem(t.dataset.fvItem, t.dataset.fvRemote === '1');
       if (t.dataset.chip) { Store.setCurrent(t.dataset.chip); render(); return; }
       if (t.dataset.retry) return Uploader.retry(t.dataset.retry);
       if (t.dataset.photo) return openViewer(t.dataset.photo);
@@ -810,6 +988,16 @@
         case 'new-folder': return openFolderDialog();
         case 'close-dialog': return t.closest('dialog').close();
         case 'close-viewer': return $('#dlg-photo').close();
+        case 'close-folder': return closeFolderView();
+        case 'fv-more': return loadFolderFiles(true);
+        case 'fv-set-target':
+          Store.setCurrent(fv.folderId);
+          render();
+          return toast('저장 위치로 지정했어요');
+        case 'fv-shoot':
+          Store.setCurrent(fv.folderId);
+          render();
+          return openCamera();
         case 'native-camera': return $(camMode === 'video' ? '#native-video' : '#native-input').click();
       }
     });
@@ -874,6 +1062,7 @@
 
     window.addEventListener('popstate', () => {
       if (!$('#camera').hidden && location.hash !== '#camera') closeCamera(true);
+      else if (fv.folderId && location.hash !== '#folder') closeFolderView(true);
     });
     window.addEventListener('online', render);
     window.addEventListener('offline', render);

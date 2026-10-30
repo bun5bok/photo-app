@@ -149,6 +149,23 @@ button { cursor: pointer; }
 .chip-selected { height: 28px; padding: 0 10px; border-radius: 14px; background: var(--accent); color: #fff; font-size: 12px; font-weight: 700; display: flex; align-items: center; flex: none; }
 .chip-sync { font-size: 11px; color: #8A4200; }
 
+/* 폴더 상세 */
+.fv-head { margin: -8px 0 -8px -10px; }
+.icon-btn { width: 44px; height: 44px; border: none; background: transparent; display: flex; align-items: center; justify-content: center; color: var(--ink); }
+.fv-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.fv-actions .btn-outline { text-decoration: none; }
+.fv-groups { display: flex; flex-direction: column; gap: 16px; }
+.fv-group h2 { margin: 0 0 8px; font-size: 14px; font-weight: 700; color: var(--muted); }
+.fv-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; }
+.fv-grid .thumb { border-radius: 6px; }
+.fv-grid .thumb { isolation: isolate; }
+.thumb .ph { position: absolute; inset: 0; z-index: -1; display: flex; align-items: center; justify-content: center; color: #8A8F96; }
+.thumb .state { position: absolute; inset: 0; background: rgba(22,24,27,.45); display: flex; align-items: center; justify-content: center; }
+.thumb .state span { height: 24px; padding: 0 8px; border-radius: 12px; background: #fff; font-size: 12px; font-weight: 700; display: flex; align-items: center; color: var(--muted); }
+.thumb .state .up { color: var(--accent); }
+.thumb .state .fail { color: var(--err); }
+.fv-groups + .empty { padding: 24px 0; }
+
 /* 업로드 탭 */
 .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .stat { padding: 14px; border-radius: 14px; background: var(--surface); border: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; }

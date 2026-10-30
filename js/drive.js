@@ -182,6 +182,15 @@
     return r.files;
   }
 
+  // 폴더 안의 사진·동영상을 최근 것부터 가져온다 (다른 휴대폰에서 올린 것 포함)
+  async function listFiles(folderId, pageToken) {
+    const query = `'${folderId}' in parents and mimeType!='${FOLDER_MIME}' and trashed=false`;
+    const fields = 'nextPageToken,files(id,name,mimeType,thumbnailLink,createdTime,webViewLink,videoMediaMetadata(durationMillis))';
+    let path = `/files?pageSize=60&orderBy=createdTime desc&fields=${encodeURIComponent(fields)}&q=${encodeURIComponent(query)}`;
+    if (pageToken) path += '&pageToken=' + encodeURIComponent(pageToken);
+    return api(path);
+  }
+
   // ---------- 재개 가능 업로드 (동영상 같은 큰 파일도 끊긴 곳부터 이어서 올린다) ----------
   const CHUNK = 8 * 1024 * 1024; // 256KB의 배수여야 한다
 
@@ -304,6 +313,6 @@
 
   window.Drive = {
     AuthError, isConfigured, rootName, allowedDomain, isAllowedAccount, hasToken, connect, disconnect,
-    userInfo, ensureRoot, ensureFolder, listFolders, upload, download, forgetVerified
+    userInfo, ensureRoot, ensureFolder, listFolders, listFiles, upload, download, forgetVerified
   };
 })();

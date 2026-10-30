@@ -113,6 +113,36 @@
       <ul id="folder-list" class="folder-list"></ul>
     </section>
 
+    <!-- 폴더 상세 (홈에서 폴더를 누르면) -->
+    <section id="folder-view" class="panel" aria-labelledby="fv-title" hidden>
+      <header class="fv-head">
+        <button class="icon-btn" type="button" data-action="close-folder" aria-label="뒤로">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>
+        </button>
+      </header>
+      <div class="stack-4">
+        <h1 id="fv-title" class="h1">폴더</h1>
+        <span id="fv-path" class="muted small"></span>
+      </div>
+      <div class="fv-actions">
+        <a id="fv-drive" class="btn btn-small btn-outline" href="#" target="_blank" rel="noopener" hidden>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>
+          드라이브에서 열기
+        </a>
+        <button id="fv-set" class="btn btn-small btn-outline" type="button" data-action="fv-set-target">저장 위치로 지정</button>
+        <span id="fv-current" class="pill pill-ok" hidden><span class="dot"></span>지금 저장 위치</span>
+      </div>
+      <p id="fv-notice" class="hold" hidden></p>
+      <div id="fv-groups" class="fv-groups"></div>
+      <p id="fv-empty" class="empty" hidden>아직 이 폴더에 사진이 없어요</p>
+      <button id="fv-more" class="btn btn-outline" type="button" data-action="fv-more" hidden>더 보기</button>
+      <p id="fv-loading" class="muted small center" hidden>드라이브에서 불러오는 중…</p>
+      <button class="btn btn-dark btn-lg" type="button" data-action="fv-shoot">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8a2 2 0 0 1 2-2h2l1.5-2h5L16 6h2a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><circle cx="12" cy="13" r="3.5"/></svg>
+        이 폴더로 촬영
+      </button>
+    </section>
+
     <!-- 업로드 -->
     <section id="tab-upload" class="panel" aria-labelledby="upload-title" hidden>
       <header class="page-head">
