@@ -377,3 +377,5 @@ body.selecting .content { padding-bottom: calc(110px + var(--safe-b)); }
 .hold-row.ok { background: var(--accent-soft); color: var(--accent); }
 .hold-row.ok .btn-hold { background: var(--accent); }
 .btn-wait { height: 32px; padding: 0 10px; border: 1px solid #D5D8D1; border-radius: 16px; background: var(--surface); color: var(--muted); font-size: 12px; font-weight: 700; flex: none; }
+
+.err-text { line-height: 1.4; overflow-wrap: anywhere; }

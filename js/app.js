@@ -903,7 +903,11 @@
       } else {
         right = CHECK_SVG;
       }
-      const sub = p.status === 'failed' && p.error ? `<span class="small c-err ellipsis">${esc(p.error)}</span>` : `<span class="small muted">${esc(p.folderName)} · ${relTime(p.createdAt)}</span>`;
+      // 실패했거나, 인터넷은 되는데 대기 중이면 마지막 오류를 보여 준다 (원인을 알 수 있게)
+      const errText = p.status === 'failed' ? p.error : (p.status === 'waiting' ? p.lastError : null);
+      const sub = errText
+        ? `<span class="small c-err err-text">${esc(errText)}</span>`
+        : `<span class="small muted">${esc(p.folderName)} · ${relTime(p.createdAt)}</span>`;
       return `<li class="upload-item">
         <button class="thumb" type="button" data-photo="${esc(p.id)}" aria-label="${esc(p.name)} 보기">${thumbInner(p)}</button>
         <span class="upload-info"><span class="name ellipsis">${esc(p.name)}</span>${sub}${bar}</span>

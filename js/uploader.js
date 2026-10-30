@@ -58,8 +58,17 @@
   // opts: { thumb, duration, startedAt, takenAt, source }
   //  - startedAt: 녹화 시작 시각 (목록 순서와 파일 이름에 씀)
   //  - takenAt: 앨범에서 고른 파일이 실제로 찍힌 시각 (파일 이름과 드라이브 수정일에만 쓰고, 목록 순서는 가져온 시각)
+  // 아이폰 사파리는 앨범·카메라 앱에서 고른 파일(File)을 보관함에 그대로 넣으면
+  // 앱을 다시 열었을 때 그 파일을 읽지 못한다. 그래서 내용을 메모리로 복사한 Blob으로 바꿔 보관한다
+  async function toMemoryBlob(file) {
+    if (!(file instanceof File)) return file;
+    const buf = await file.arrayBuffer();
+    return new Blob([buf], { type: file.type });
+  }
+
   async function add(blob, folder, opts) {
     opts = opts || {};
+    blob = await toMemoryBlob(blob);
     const settings = Store.getSettings();
     const isVideo = /^video\//.test(blob.type);
     let thumb = opts.thumb || '';
@@ -166,7 +175,23 @@
     return waiting[0];
   }
 
+  // 보관함에 든 원본을 실제로 읽을 수 있는지 1바이트만 읽어 본다
+  async function readable(blob) {
+    if (!blob || !blob.size) return false;
+    try {
+      await blob.slice(0, 1).arrayBuffer();
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
   async function uploadOne(photo, my) {
+    if (!(await readable(photo.blob))) {
+      const err = new Error('휴대폰에서 원본을 읽을 수 없어요. 지우고 앨범에서 다시 골라 주세요.');
+      err.unreadable = true;
+      throw err;
+    }
     if (!(await Store.photos.update(photo.id, { status: 'uploading' }))) return; // 그사이 지워짐
     currentId = photo.id;
     progress.set(photo.id, 0);
@@ -212,7 +237,7 @@
     }
 
     // 올라간 사진은 원본을 지워 휴대폰 저장 공간을 아낀다 (썸네일만 남김)
-    await Store.photos.update(photo.id, { status: 'done', blob: null, uploadUrl: null, priority: 0, doneAt: Date.now(), driveFileId: file.id, webViewLink: file.webViewLink || null, error: null });
+    await Store.photos.update(photo.id, { status: 'done', blob: null, uploadUrl: null, priority: 0, lastError: null, doneAt: Date.now(), driveFileId: file.id, webViewLink: file.webViewLink || null, error: null });
 
     const fs = Store.getFolders();
     const i = fs.findIndex((f) => f.id === current.folderId);
@@ -254,13 +279,6 @@
         if (!photo) { setHold(null); resetBackoff(); netFailed = false; break; }
         const reason = holdReason();
         if (reason) { setHold(reason); break; }
-        // 직전에 연결이 끊겼다면 실제로 구글에 닿는지 먼저 확인한다
-        if (netFailed && !(await Drive.reachable())) {
-          if (my !== gen) return;
-          setHold('offline');
-          scheduleRetry();
-          break;
-        }
         setHold(null);
         try {
           await uploadOne(photo, my);
@@ -279,8 +297,19 @@
             await Store.photos.update(photo.id, { status: 'waiting', uploadUrl: null });
             continue;
           }
+          // 원본을 읽을 수 없는 사진은 몇 번을 다시 해도 안 되니 실패로 표시하고 다음 사진으로 넘어간다
+          // (같은 파일을 앨범에서 다시 고를 수 있게 '이미 가져옴' 표시도 지운다)
+          if (err.unreadable) {
+            await Store.photos.update(photo.id, { status: 'failed', error: err.message, sourceKey: null, priority: 0 });
+            emit('failed', { id: photo.id, message: err.message });
+            emit('change');
+            continue;
+          }
           if (err.network || err.dbTimeout || !navigator.onLine) {
-            await Store.photos.update(photo.id, { status: 'waiting' }).catch(() => {});
+            // 인터넷이 정말 끊긴 건지 확인해서, 연결은 되는데 실패한 경우는 오류 내용을 남겨 둔다
+            const online = navigator.onLine && await Drive.reachable();
+            if (my !== gen) return;
+            await Store.photos.update(photo.id, { status: 'waiting', lastError: online ? err.message : null }).catch(() => {});
             netFailed = true;
             setHold('offline');
             scheduleRetry();
