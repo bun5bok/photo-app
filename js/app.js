@@ -391,10 +391,12 @@
   }
 
   async function closeCamera(fromPopState) {
-    if (Camera.isRecording()) Camera.stopRecording(); // 녹화 중이면 저장하고 닫는다
+    const wasRecording = Camera.isRecording();
+    if (wasRecording) Camera.stopRecording(); // 녹화 중이면 저장하고 닫는다 (새 버전 적용은 저장 뒤에)
     Camera.stop();
     $('#camera').hidden = true;
     if (!fromPopState && location.hash === '#camera') history.back();
+    if (reloadPending && !wasRecording) setTimeout(() => location.reload(), 300);
   }
 
   function renderModeSwitch() {
@@ -575,6 +577,7 @@
       if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
     }
     if (result) await savePhoto(result.blob, { thumb: result.thumb, duration: result.duration, startedAt: result.startedAt });
+    if (reloadPending && $('#camera').hidden) location.reload();
   }
 
   async function shoot() {
@@ -903,9 +906,28 @@
     } else {
       showConnect();
     }
-    if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-      navigator.serviceWorker.register('sw.js').catch(() => {});
-    }
+    registerServiceWorker();
+  }
+
+  // 새 버전을 올리면 앱을 다시 열 때 바로 바뀌도록 한다.
+  // 새 버전이 준비되면 화면을 한 번 새로 고치되, 촬영 중이면 카메라를 닫은 뒤에 한다
+  let reloadPending = false;
+  function reloadForUpdate() {
+    if (!$('#camera').hidden || Camera.isRecording()) { reloadPending = true; return; }
+    location.reload();
+  }
+
+  function registerServiceWorker() {
+    if (!('serviceWorker' in navigator) || location.protocol === 'file:') return;
+    const hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (hadController) reloadForUpdate();
+    });
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then((reg) => {
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) reg.update().catch(() => {});
+      });
+    }).catch(() => {});
   }
 
   boot();
