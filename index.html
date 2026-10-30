@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#F4F5F2">
+  <title>사진촬영</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap">
+  <link rel="stylesheet" href="styles.css">
+  <script src="config.js"></script>
+  <script src="https://accounts.google.com/gsi/client" async></script>
+</head>
+<body>
+
+<!-- 드라이브 연결 화면 -->
+<section id="connect" class="screen connect" hidden>
+  <div class="connect-art" aria-hidden="true">
+    <span class="art-box art-dark">
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8a2 2 0 0 1 2-2h2l1.5-2h5L16 6h2a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><circle cx="12" cy="13" r="3.5"/></svg>
+    </span>
+    <svg width="40" height="24" viewBox="0 0 40 24" fill="none" stroke="#2453D6" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h34"/><path d="M28 4l8 8-8 8"/></svg>
+    <span class="art-box art-soft">
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#2453D6" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+    </span>
+  </div>
+  <h1 class="connect-title">찍으면 바로<br>드라이브 폴더로</h1>
+  <p class="connect-lead">폴더를 고르고 촬영만 하세요. 업로드와 정리는 앱이 알아서 합니다.</p>
+  <ol class="steps">
+    <li><span class="step-no">1</span><span><strong>구글 계정 연결</strong><small id="step1-hint">한 번만 하면 됩니다</small></span></li>
+    <li><span class="step-no">2</span><span><strong>업로드할 폴더 선택</strong><small>드라이브에 같은 이름의 폴더가 생겨요</small></span></li>
+    <li><span class="step-no">3</span><span><strong>촬영하면 자동 업로드</strong><small>인터넷이 끊겨도 대기했다가 올려요</small></span></li>
+  </ol>
+  <div class="connect-actions">
+    <p id="setup-warning" class="setup-warning" hidden>config.js에 Google OAuth 클라이언트 ID를 넣어야 연결할 수 있어요. README.md를 확인하세요.</p>
+    <button id="btn-connect" class="btn btn-primary btn-lg" type="button">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg>
+      Google 계정으로 연결
+    </button>
+    <p class="fine">사진촬영 앱이 만든 폴더와 파일에만 접근합니다.<br>기존 드라이브 파일은 보거나 수정하지 않아요.</p>
+  </div>
+</section>
+
+<!-- 메인 앱 (탭) -->
+<div id="app" class="app" hidden>
+  <div id="reconnect-banner" class="banner" hidden>
+    <span>드라이브 연결이 만료됐어요. 사진은 휴대폰에 안전하게 보관 중입니다.</span>
+    <button id="btn-reconnect" class="btn btn-small" type="button">다시 연결</button>
+  </div>
+
+  <main class="content">
+    <!-- 홈 -->
+    <section id="tab-home" class="panel" aria-labelledby="home-title">
+      <header class="page-head">
+        <div class="stack-2">
+          <span id="today" class="muted small"></span>
+          <h1 id="home-title" class="h1">사진촬영</h1>
+        </div>
+        <span id="conn-pill" class="pill pill-ok"><span class="dot"></span><span id="conn-text">드라이브 연결됨</span></span>
+      </header>
+
+      <section class="target-card">
+        <div class="target-row">
+          <div class="stack-4 min0">
+            <span class="target-label">지금 찍으면 여기로 올라가요</span>
+            <span id="target-name" class="target-name">폴더를 선택하세요</span>
+            <span id="target-path" class="target-path"></span>
+          </div>
+          <button class="btn-ghost-light" type="button" data-go="folders">변경</button>
+        </div>
+        <button class="btn btn-white" type="button" data-action="open-camera">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8a2 2 0 0 1 2-2h2l1.5-2h5L16 6h2a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><circle cx="12" cy="13" r="3.5"/></svg>
+          바로 촬영
+        </button>
+      </section>
+
+      <button class="card progress-card" type="button" data-go="upload">
+        <span class="row-between">
+          <strong id="home-progress-title">대기 중인 사진 없음</strong>
+          <span id="home-progress-sub" class="muted small"></span>
+        </span>
+        <span class="bar"><span id="home-progress-bar" class="bar-fill" style="width:0%"></span></span>
+      </button>
+
+      <div class="row-between section-head">
+        <h2 class="h2">최근 사진</h2>
+        <button class="btn-link" type="button" data-go="upload">전체 보기</button>
+      </div>
+      <div id="recent-grid" class="recent-grid"></div>
+
+      <h2 class="h2 section-head">폴더</h2>
+      <div id="home-folders" class="folder-grid"></div>
+    </section>
+
+    <!-- 폴더 -->
+    <section id="tab-folders" class="panel" aria-labelledby="folders-title" hidden>
+      <header class="page-head">
+        <h1 id="folders-title" class="h1">폴더</h1>
+        <button class="btn btn-dark btn-small" type="button" data-action="new-folder">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          새 폴더
+        </button>
+      </header>
+      <label class="search">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#5B6068" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+        <span class="sr-only">폴더 검색</span>
+        <input id="folder-search" type="search" placeholder="폴더 이름 검색" autocomplete="off">
+      </label>
+      <p class="muted small">폴더를 누르면 저장 위치로 지정돼요</p>
+      <ul id="folder-list" class="folder-list"></ul>
+    </section>
+
+    <!-- 업로드 -->
+    <section id="tab-upload" class="panel" aria-labelledby="upload-title" hidden>
+      <header class="page-head">
+        <h1 id="upload-title" class="h1">업로드</h1>
+        <button id="btn-retry-all" class="btn btn-small btn-outline" type="button" hidden>모두 다시 시도</button>
+      </header>
+      <div class="stats">
+        <div class="stat"><span class="muted small">진행 중</span><strong id="stat-active" class="c-accent">0</strong></div>
+        <div class="stat"><span class="muted small">오늘 완료</span><strong id="stat-done" class="c-ok">0</strong></div>
+        <div class="stat"><span class="muted small">실패</span><strong id="stat-failed" class="c-err">0</strong></div>
+      </div>
+      <p id="upload-hold" class="hold" hidden></p>
+      <ul id="upload-list" class="upload-list"></ul>
+      <p id="upload-empty" class="empty">아직 찍은 사진이 없어요</p>
+    </section>
+
+    <!-- 설정 -->
+    <section id="tab-settings" class="panel" aria-labelledby="settings-title" hidden>
+      <h1 id="settings-title" class="h1 page-head">설정</h1>
+      <section class="card account">
+        <span id="account-initial" class="avatar">G</span>
+        <span class="stack-2 grow min0">
+          <strong id="account-email" class="ellipsis">구글 계정</strong>
+          <span id="account-status" class="small c-ok">드라이브 연결됨</span>
+        </span>
+        <button id="btn-disconnect" class="btn btn-small btn-outline" type="button">연결 해제</button>
+      </section>
+
+      <h2 class="group-title">드라이브</h2>
+      <div class="card list-card">
+        <div class="setting-row"><span>기본 위치</span><span class="muted small">내 드라이브 › <span id="root-name"></span></span></div>
+        <div class="setting-row"><span>파일 이름</span><span class="muted small">날짜_시간.jpg</span></div>
+      </div>
+
+      <h2 class="group-title">업로드</h2>
+      <div class="card list-card">
+        <label class="setting-row toggle-row">
+          <span class="stack-2 grow"><span>모바일 데이터로도 업로드</span><small class="muted">끄면 Wi-Fi에서만 올려요 (안드로이드)</small></span>
+          <input id="opt-data" type="checkbox">
+        </label>
+        <label class="setting-row toggle-row">
+          <span class="stack-2 grow"><span>원본 화질로 업로드</span><small class="muted">끄면 긴 변 1920px로 줄여서 올려요</small></span>
+          <input id="opt-original" type="checkbox">
+        </label>
+        <label class="setting-row toggle-row">
+          <span class="stack-2 grow"><span>업로드 완료 알림</span><small class="muted">실패했을 때는 항상 알려요</small></span>
+          <input id="opt-notify" type="checkbox">
+        </label>
+      </div>
+      <p class="muted small center">사진촬영 v1.0</p>
+    </section>
+  </main>
+
+  <nav class="tabbar" aria-label="주 메뉴">
+    <button class="tab" type="button" data-tab="home" aria-pressed="true">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 11l8-7 8 7v8a1 1 0 0 1-1 1h-4v-6h-6v6H5a1 1 0 0 1-1-1z"/></svg>
+      홈
+    </button>
+    <button class="tab" type="button" data-tab="folders" aria-pressed="false">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+      폴더
+    </button>
+    <button class="tab-shutter" type="button" data-action="open-camera" aria-label="촬영">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8a2 2 0 0 1 2-2h2l1.5-2h5L16 6h2a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><circle cx="12" cy="13" r="3.5"/></svg>
+    </button>
+    <button class="tab" type="button" data-tab="upload" aria-pressed="false">
+      <span class="tab-icon">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+        <span id="tab-badge" class="badge" hidden>0</span>
+      </span>
+      업로드
+    </button>
+    <button class="tab" type="button" data-tab="settings" aria-pressed="false">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
+      설정
+    </button>
+  </nav>
+</div>
+
+<!-- 카메라 -->
+<section id="camera" class="camera" hidden aria-label="촬영">
+  <header class="cam-head">
+    <button class="cam-round" type="button" data-action="close-camera" aria-label="닫기">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+    <span class="cam-status">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4"/><path d="M7 9l5-5 5 5"/></svg>
+      자동 업로드 켜짐
+    </span>
+    <button id="btn-torch" class="cam-round" type="button" aria-label="플래시" aria-pressed="false" hidden>
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M13 3L5 13h6l-1 8 8-10h-6z"/></svg>
+    </button>
+    <span id="torch-spacer" class="cam-spacer"></span>
+  </header>
+
+  <div class="viewfinder">
+    <video id="video" playsinline muted autoplay></video>
+    <div class="grid-lines" aria-hidden="true"></div>
+    <div id="cam-error" class="cam-error" hidden>
+      <p id="cam-error-text">카메라를 열 수 없어요.</p>
+      <button class="btn btn-white" type="button" data-action="native-camera">휴대폰 카메라 앱으로 찍기</button>
+    </div>
+    <div id="flash" class="flash" aria-hidden="true"></div>
+    <div id="cam-toast" class="cam-toast" role="status" hidden></div>
+  </div>
+
+  <div id="cam-chips" class="chips"></div>
+
+  <div class="cam-controls">
+    <button id="cam-last" class="cam-last" type="button" data-go-close="upload" aria-label="최근 사진 보기">
+      <span id="cam-count" class="cam-count" hidden>0</span>
+    </button>
+    <button id="btn-shutter" class="shutter" type="button" aria-label="촬영"><span></span></button>
+    <button id="btn-flip" class="cam-round cam-round-lg" type="button" aria-label="카메라 전환">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.3-4.9L4 8"/><path d="M4 4v4h4"/><path d="M4 13a8 8 0 0 0 14.3 4.9L20 16"/><path d="M20 20v-4h-4"/></svg>
+    </button>
+  </div>
+  <input id="native-input" type="file" accept="image/*" capture="environment" hidden>
+</section>
+
+<!-- 새 폴더 -->
+<dialog id="dlg-folder" class="sheet">
+  <form method="dialog" id="form-folder">
+    <h2 class="h2">새 폴더</h2>
+    <label class="field">
+      <span>폴더 이름</span>
+      <input id="new-folder-name" type="text" maxlength="60" required placeholder="예: 시설 점검">
+    </label>
+    <p class="muted small">드라이브의 ‘<span class="root-name-inline"></span>’ 폴더 안에 만들어져요.</p>
+    <div class="sheet-actions">
+      <button class="btn btn-outline" type="button" value="cancel" data-action="close-dialog">취소</button>
+      <button class="btn btn-primary" type="submit" value="ok">만들기</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- 사진 보기 -->
+<dialog id="dlg-photo" class="viewer">
+  <img id="viewer-img" alt="">
+  <div class="viewer-bar">
+    <span id="viewer-meta" class="small"></span>
+    <button class="btn btn-small btn-white" type="button" data-action="close-viewer">닫기</button>
+  </div>
+</dialog>
+
+<div id="toast" class="toast" role="status" hidden></div>
+
+<script src="js/store.js"></script>
+<script src="js/drive.js"></script>
+<script src="js/uploader.js"></script>
+<script src="js/camera.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
