@@ -186,9 +186,19 @@
     }
   }
 
+  // 보관함에서 원본을 꺼낸다. 못 읽으면 보관함 연결을 새로 열고 한 번 더 시도한다
+  async function loadData(id) {
+    let data = await Store.photos.getData(id);
+    if (await readable(data)) return data;
+    Store.photos.reset();
+    data = await Store.photos.getData(id);
+    return (await readable(data)) ? data : null;
+  }
+
   async function uploadOne(photo, my) {
-    if (!(await readable(photo.blob))) {
-      const err = new Error('휴대폰에서 원본을 읽을 수 없어요. 지우고 앨범에서 다시 골라 주세요.');
+    const data = await loadData(photo.id);
+    if (!data) {
+      const err = new Error('휴대폰에서 원본을 읽을 수 없어요. 지우고 다시 찍거나 앨범에서 다시 골라 주세요.');
       err.unreadable = true;
       throw err;
     }
@@ -210,7 +220,7 @@
     let last = 0;
     // 드라이브의 '수정한 날짜'를 찍은 시각으로 맞춰 두면 드라이브와 폴더 화면에서 찍은 순서대로 정렬된다
     const meta = { name: photo.name, modifiedTime: new Date(photo.takenAt || photo.createdAt).toISOString() };
-    const file = await Drive.upload(photo.blob, meta, driveId, (ratio) => {
+    const file = await Drive.upload(data, meta, driveId, (ratio) => {
       beat();
       progress.set(photo.id, ratio);
       if (Date.now() - last > 150) { last = Date.now(); emit('progress', { id: photo.id, ratio }); }

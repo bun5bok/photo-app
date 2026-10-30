@@ -1,5 +1,5 @@
 // 앱 화면 파일을 저장해 두어 인터넷이 없어도 앱이 열리게 한다 (사진 업로드는 앱 안 대기열이 담당)
-const VERSION = 'photo-app-v9';
+const VERSION = 'photo-app-v10';
 const SHELL = [
   './',
   'index.html',

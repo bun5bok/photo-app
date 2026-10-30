@@ -517,6 +517,8 @@
         if (p.driveFileId) { await Drive.trash(p.driveFileId); trashed.push(p.driveFileId); }
         if (!p.remote) {
           const rec = await Store.photos.get(p.id);
+          // 아직 안 올라간 것은 되돌리기를 위해 원본도 잠시 메모리에 들고 있는다
+          if (rec && rec.status !== 'done') rec.blob = await Store.photos.getData(p.id).catch(() => null);
           if (rec) { removedRecords.push(rec); await Store.photos.remove(p.id); }
           if (rec && rec.status === 'done') bumpCount(rec.folderId, -1);
         } else {
@@ -607,7 +609,7 @@
 
   async function saveItems(items) {
     if (!items.length) return;
-    if (items.some((p) => !p.blob && p.driveFileId) && !Drive.hasToken()) {
+    if (items.some((p) => p.status === 'done' && p.driveFileId) && !Drive.hasToken()) {
       return toast('드라이브 연결이 필요해요. 위의 ‘다시 연결’을 눌러 주세요');
     }
     saveFiles = [];
@@ -616,8 +618,8 @@
       toastSticky(`휴대폰에 저장할 준비 중 ${i + 1}/${items.length}`);
       const p = items[i];
       try {
-        const rec = !p.remote ? await Store.photos.get(p.id) : null;
-        const blob = (rec && rec.blob) || (p.driveFileId ? await Drive.download(p.driveFileId) : null);
+        const local = !p.remote ? await Store.photos.getData(p.id) : null;
+        const blob = local || (p.driveFileId ? await Drive.download(p.driveFileId) : null);
         if (!blob) throw new Error('no data');
         saveFiles.push(new File([blob], p.name, { type: blob.type || (p.kind === 'video' ? 'video/mp4' : 'image/jpeg') }));
       } catch (e) {
@@ -1410,10 +1412,13 @@
     $('#viewer-loading').hidden = true;
     $('#viewer-drive').hidden = !link;
     if (link) $('#viewer-drive').href = link;
+    // 아직 올라가지 않은 것은 휴대폰 보관함에서 원본을 꺼낸다
+    const local = !p.remote && p.status !== 'done' ? await Store.photos.getData(p.id).catch(() => null) : null;
+    if (token !== viewerToken) return;
 
-    if (isVideo && p.blob) {
+    if (isVideo && local) {
       // 아직 휴대폰에 있는 동영상은 바로 재생
-      viewerUrl = URL.createObjectURL(p.blob);
+      viewerUrl = URL.createObjectURL(local);
       vid.src = viewerUrl;
       vid.hidden = false;
       img.hidden = true;
@@ -1426,8 +1431,8 @@
       $('#viewer-hint').hidden = isVideo;
       $('#viewer-hint').classList.remove('gone');
       setTimeout(() => $('#viewer-hint').classList.add('gone'), 2500);
-      if (p.blob) {
-        viewerUrl = URL.createObjectURL(p.blob);
+      if (local) {
+        viewerUrl = URL.createObjectURL(local);
         img.src = viewerUrl;
       } else {
         img.src = p.thumb;
